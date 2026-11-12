@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en" class="dark" dir="ltr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Sanctuary Pulse — Christian Music & 365 Calisthenics</title>
+    <meta name="description" content="High-fidelity Christian music streaming, offline playlist vault, cross-device Connect sync, and a 365-day smart home calisthenics and daily devotional coach." />
+    <meta property="og:title" content="Sanctuary Pulse — Christian Music & 365 Calisthenics" />
+    <meta property="og:description" content="High-fidelity Christian music streaming, offline playlist vault, cross-device Connect sync, and a 365-day smart home calisthenics and daily devotional coach." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#090A0F" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Sanctuary" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <script>
+      // Purge any legacy Service Worker caches so updates apply immediately
+      if ('caches' in window) {
+        caches.keys().then(function (keys) {
+          keys.forEach(function (k) {
+            if (k !== 'sanctuary-pulse-v6') {
+              caches.delete(k);
+            }
+          });
+        });
+      }
+    </script>
+  </head>
+  <body class="bg-slate-50 dark:bg-[#090A0F] text-slate-900 dark:text-[#F4F4F6] antialiased selection:bg-amber-500 selection:text-slate-950 overflow-hidden">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

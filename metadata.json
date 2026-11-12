@@ -1,0 +1,6 @@
+{
+  "name": "Sanctuary Pulse — Christian Music & 365 Calisthenics",
+  "description": "High-fidelity Christian music streaming, offline playlist vault, cross-device Connect sync, and a 365-day smart home calisthenics and daily devotional coach.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
