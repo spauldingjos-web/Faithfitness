@@ -627,8 +627,7 @@ export const FullScreenVideoFeedModal: React.FC<FullScreenVideoFeedModalProps> =
     <div
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
-      className="fixed inset-0 z-50 w-screen h-screen bg-black overflow-hidden select-none"
-      style={{ width: '100vw', height: '100vh' }}
+      className="fixed inset-x-0 top-0 bottom-[62px] md:bottom-0 z-50 bg-black overflow-hidden select-none"
     >
       {/* Full-Viewport Video Canvas + Official Music Video Background */}
       <TrackVideoCanvas

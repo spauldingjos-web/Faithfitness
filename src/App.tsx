@@ -378,7 +378,7 @@ export default function App() {
     if (typeof window !== 'undefined' && 'caches' in window) {
       caches.keys().then((keys) => {
         keys.forEach((k) => {
-          if (k !== 'sanctuary-pulse-v6') {
+          if (k !== 'sanctuary-pulse-v7' && k !== 'sanctuary-audio-vault-v7') {
             caches.delete(k).catch(() => {});
           }
         });
@@ -708,7 +708,11 @@ export default function App() {
       audioEngine.pause();
       setIsPlaying(false);
     } else {
-      audioEngine.resume();
+      if (audioEngine.hasActiveAudio()) {
+        audioEngine.resume(currentTrack);
+      } else {
+        audioEngine.loadAndPlay(currentTrack, currentTime);
+      }
       setIsPlaying(true);
     }
   };
@@ -728,11 +732,11 @@ export default function App() {
       : '64kbps Saver';
 
   return (
-    <div className="h-screen w-screen overflow-hidden flex flex-col bg-slate-50 dark:bg-[#090A0F] text-slate-900 dark:text-[#F4F4F6]">
+    <div className="h-[100dvh] w-screen overflow-hidden flex flex-col bg-slate-50 dark:bg-[#090A0F] text-slate-900 dark:text-[#F4F4F6]">
       <OfflineIndicator offlineTracksCount={offlineIds.length} />
 
       {/* Main App Workspace: Desktop Left Sidebar + Central Native Feed */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 min-h-0 flex overflow-hidden">
         {/* Left Navigation Rail (Desktop / Tablet) */}
         <aside className="hidden md:flex flex-col w-64 shrink-0 bg-white dark:bg-[#0D0F17] border-r border-slate-200 dark:border-slate-800/80 p-4 justify-between">
           <div className="space-y-6">
@@ -889,12 +893,12 @@ export default function App() {
         </aside>
 
         {/* Central App Viewport */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-          {/* App Top Bar: Universal Search, Verified/AI Filter, Theme, Connect, Install */}
-          <header className="h-16 shrink-0 px-4 sm:px-6 border-b border-slate-200 dark:border-slate-800/80 bg-white/85 dark:bg-[#090A0F]/85 backdrop-blur-md flex items-center justify-between gap-4 z-30">
-            {/* Universal Search Input (Uncontrolled ref-backed DOM input + caret-end lock so typing never goes backwards) */}
-            <div className="relative flex-1 max-w-lg">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+          {/* App Top Bar: Universal Search, Liked, Video, Theme, Install */}
+          <header className="h-14 sm:h-16 shrink-0 px-3 sm:px-6 border-b border-slate-200 dark:border-slate-800/80 bg-white/90 dark:bg-[#090A0F]/90 backdrop-blur-md flex items-center justify-between gap-2 sm:gap-3 z-30">
+            {/* Universal Search Input */}
+            <div className="relative flex-1 min-w-[130px] max-w-lg">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 ref={searchInputRef}
                 type="text"
@@ -918,8 +922,8 @@ export default function App() {
                     } catch {}
                   }
                 }}
-                placeholder="Search songs, artists, or genres (Gratitude, Skillet, Demon Hunter, Lecrae)..."
-                className="w-full min-h-[40px] pl-10 pr-9 rounded-xl bg-slate-100 dark:bg-[#12141E] border border-slate-200 dark:border-slate-800 text-xs sm:text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 select-text text-left"
+                placeholder="Search songs, artists, or genres..."
+                className="w-full min-h-[38px] pl-9 pr-8 rounded-xl bg-slate-100 dark:bg-[#12141E] border border-slate-200 dark:border-slate-800 text-xs sm:text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 select-text text-left"
               />
               {searchQuery && (
                 <button
@@ -937,7 +941,7 @@ export default function App() {
             </div>
 
             {/* Right Utility Controls */}
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
               <PWAInstallButton />
 
               {/* Direct 1-Tap Liked Songs Shortcut Button */}
@@ -956,26 +960,26 @@ export default function App() {
                   });
                   setActiveTab('library');
                 }}
-                className="min-h-[40px] px-3 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap border border-emerald-500/30"
+                className="min-h-[38px] px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap border border-emerald-500/30"
                 title="View All Liked Songs ♥"
               >
-                <Heart className="w-4 h-4 fill-current text-emerald-400" />
+                <Heart className="w-3.5 h-3.5 fill-current text-emerald-400 shrink-0" />
                 <span className="font-extrabold">Liked ({bookmarkedIds.length})</span>
               </button>
 
               <button
                 onClick={() => setIsVideoFeedOpen(true)}
-                className="min-h-[40px] px-3 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shadow-sm"
-                title="Open Spotify Video Canvas & Full-Song Feed"
+                className="min-h-[38px] px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shadow-sm"
+                title="Open Video Feed"
               >
-                <Film className="w-4 h-4" />
+                <Film className="w-4 h-4 shrink-0" />
                 <span className="hidden sm:inline">Video Feed</span>
               </button>
 
               <button
                 onClick={() => setRingtoneStudioTrack(currentTrack)}
-                className="min-h-[40px] px-3 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500 text-amber-500 hover:text-slate-950 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
-                title="Add current song straight to Ringtones"
+                className="hidden sm:flex min-h-[38px] px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500 text-amber-500 hover:text-slate-950 text-xs font-bold items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+                title="Ringtone Studio"
               >
                 <BellRing className="w-4 h-4" />
                 <span className="hidden md:inline">Ringtone</span>
@@ -983,8 +987,8 @@ export default function App() {
 
               <button
                 onClick={() => setIsConnectOpen(true)}
-                className="min-h-[40px] px-3 py-2 rounded-xl bg-slate-100 dark:bg-[#12141E] border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 hover:border-amber-500/50 cursor-pointer whitespace-nowrap"
-                title="Sanctuary Connect — Cross-Device Sync"
+                className="hidden md:flex min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-[#12141E] border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 items-center gap-1.5 hover:border-amber-500/50 cursor-pointer whitespace-nowrap"
+                title="Sanctuary Connect"
               >
                 <Speaker className="w-4 h-4 text-amber-500" />
                 <span className="hidden lg:inline">Connect</span>
@@ -992,7 +996,7 @@ export default function App() {
 
               <button
                 onClick={() => setIsDark(!isDark)}
-                className="min-h-[40px] min-w-[40px] rounded-xl bg-slate-100 dark:bg-[#12141E] border border-slate-200 dark:border-slate-800 flex items-center justify-center text-slate-700 dark:text-slate-200 hover:border-amber-500/50 cursor-pointer"
+                className="hidden sm:flex min-h-[38px] min-w-[38px] rounded-xl bg-slate-100 dark:bg-[#12141E] border border-slate-200 dark:border-slate-800 items-center justify-center text-slate-700 dark:text-slate-200 hover:border-amber-500/50 cursor-pointer"
                 title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
               >
                 {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
@@ -1000,8 +1004,40 @@ export default function App() {
             </div>
           </header>
 
+          {/* Always-Visible Mobile & Tablet Top Navigation Tab Strip */}
+          <div className="md:hidden shrink-0 bg-white dark:bg-[#0D0F17] border-b border-slate-200 dark:border-slate-800/90 px-2 py-1.5 grid grid-cols-5 gap-1 z-30">
+            {[
+              { id: 'home', label: 'Home', icon: Home },
+              { id: 'explore', label: 'Explore', icon: Compass },
+              { id: 'calisthenics', label: '365 Coach', icon: Dumbbell },
+              { id: 'radar', label: 'Releases', icon: Radio },
+              { id: 'library', label: 'Vault', icon: Library },
+            ].map((tab) => {
+              const Icon = tab.icon;
+              const active = activeTab === tab.id;
+              return (
+                <button
+                  key={`top-${tab.id}`}
+                  onClick={() => {
+                    setActiveTab(tab.id as AppTab);
+                    setSelectedPlaylistView(null);
+                    setIsVideoFeedOpen(false);
+                  }}
+                  className={`min-h-[36px] rounded-xl flex items-center justify-center gap-1 px-1.5 text-[11px] font-bold transition-colors cursor-pointer ${
+                    active
+                      ? 'bg-amber-500 text-slate-950 shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
           {/* Scrollable Main Content Feed */}
-          <main className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 pb-28 md:pb-8">
+          <main className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-5 pb-12 md:pb-8">
             <div className="max-w-7xl mx-auto space-y-7">
               {/* UNIVERSAL SEARCH RESULTS PANEL */}
               {searchQuery.trim() !== '' && (
@@ -2644,11 +2680,12 @@ export default function App() {
         onShareTrack={handleShareTrack}
         onOpenRingtoneStudio={(trk) => setRingtoneStudioTrack(trk)}
         onOpenFullScreenVideo={() => setIsVideoFeedOpen(true)}
+        activeTab={activeTab}
       />
 
       {/* Spotify-Style Floating Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-2xl bg-emerald-500 text-slate-950 font-extrabold text-xs shadow-2xl flex items-center gap-2.5 animate-bounce">
+        <div className="fixed bottom-32 left-1/2 -translate-x-1/2 z-[75] px-4 py-2.5 rounded-2xl bg-emerald-500 text-slate-950 font-extrabold text-xs shadow-2xl flex items-center gap-2.5 animate-bounce">
           <Check className="w-4 h-4 shrink-0" />
           <span>{toastMessage}</span>
           <button
@@ -2693,13 +2730,13 @@ export default function App() {
         onCreatePlaylistWithTrack={handleCreatePlaylistWithTrack}
       />
 
-      {/* Mobile Bottom Tab Bar */}
-      <nav className="md:hidden grid grid-cols-5 items-center h-14 shrink-0 bg-white/95 dark:bg-[#0D0F17]/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 z-40">
+      {/* Always-Visible Mobile Bottom Tab Bar (z-[70] so it is never hidden by player or video feed) */}
+      <nav className="md:hidden grid grid-cols-5 items-center h-[62px] shrink-0 bg-white dark:bg-[#0D0F17] border-t border-slate-200 dark:border-slate-800 px-1 pb-[env(safe-area-inset-bottom)] z-[70]">
         {[
-          { id: 'home', label: 'Listen', icon: Home },
+          { id: 'home', label: 'Home', icon: Home },
           { id: 'explore', label: 'Explore', icon: Compass },
           { id: 'calisthenics', label: '365 Coach', icon: Dumbbell },
-          { id: 'radar', label: 'New Releases', icon: Radio },
+          { id: 'radar', label: 'Releases', icon: Radio },
           { id: 'library', label: 'Vault', icon: Library },
         ].map((tab) => {
           const Icon = tab.icon;
@@ -2707,13 +2744,19 @@ export default function App() {
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id as AppTab)}
-              className={`min-h-[44px] flex flex-col items-center justify-center cursor-pointer ${
-                active ? 'text-amber-500' : 'text-slate-500 dark:text-slate-400'
+              onClick={() => {
+                setActiveTab(tab.id as AppTab);
+                setSelectedPlaylistView(null);
+                setIsVideoFeedOpen(false);
+              }}
+              className={`min-h-[48px] rounded-xl flex flex-col items-center justify-center cursor-pointer transition-colors ${
+                active
+                  ? 'text-amber-500 font-extrabold bg-amber-500/10'
+                  : 'text-slate-500 dark:text-slate-300 hover:text-white'
               }`}
             >
               <Icon className="w-5 h-5" />
-              <span className="text-[10px] font-semibold mt-0.5">{tab.label}</span>
+              <span className="text-[11px] font-bold mt-0.5">{tab.label}</span>
             </button>
           );
         })}

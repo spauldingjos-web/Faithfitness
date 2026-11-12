@@ -21,15 +21,14 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <script>
-      // Purge any legacy Service Worker caches so updates apply immediately
-      if ('caches' in window) {
-        caches.keys().then(function (keys) {
-          keys.forEach(function (k) {
-            if (k !== 'sanctuary-pulse-v6') {
-              caches.delete(k);
-            }
-          });
-        });
+      window.__deferredPWAInstallPrompt = null;
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        window.__deferredPWAInstallPrompt = e;
+        window.dispatchEvent(new Event('pwa-prompt-ready'));
+      });
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {});
       }
     </script>
   </head>

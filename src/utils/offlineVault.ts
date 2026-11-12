@@ -92,8 +92,37 @@ function openVaultDB(): Promise<IDBDatabase> {
   });
 }
 
+const memoryBlobUrlMap = new Map<string, string>();
+
+export function getCachedBlobUrlSync(trackId: string): string | null {
+  return memoryBlobUrlMap.get(trackId) || null;
+}
+
+export async function preloadOfflineBlobUrls(): Promise<void> {
+  try {
+    const db = await openVaultDB();
+    const tx = db.transaction(STORE_AUDIO_BLOBS, 'readonly');
+    const req = tx.objectStore(STORE_AUDIO_BLOBS).getAll();
+    req.onsuccess = () => {
+      const items = (req.result as { id: string; blob: Blob }[]) || [];
+      items.forEach((item) => {
+        if (item?.id && item?.blob instanceof Blob && item.blob.size > 1000) {
+          if (!memoryBlobUrlMap.has(item.id)) {
+            memoryBlobUrlMap.set(item.id, URL.createObjectURL(item.blob));
+          }
+        }
+      });
+    };
+  } catch {
+    // ignore
+  }
+}
+
 export async function saveTrackAudioBlob(trackId: string, blob: Blob): Promise<void> {
   try {
+    if (blob && blob.size > 1000) {
+      memoryBlobUrlMap.set(trackId, URL.createObjectURL(blob));
+    }
     const db = await openVaultDB();
     const tx = db.transaction(STORE_AUDIO_BLOBS, 'readwrite');
     tx.objectStore(STORE_AUDIO_BLOBS).put({
@@ -116,6 +145,9 @@ export async function getTrackAudioBlob(trackId: string): Promise<Blob | null> {
       const req = tx.objectStore(STORE_AUDIO_BLOBS).get(trackId);
       req.onsuccess = () => {
         if (req.result && req.result.blob instanceof Blob) {
+          if (!memoryBlobUrlMap.has(trackId) && req.result.blob.size > 1000) {
+            memoryBlobUrlMap.set(trackId, URL.createObjectURL(req.result.blob));
+          }
           resolve(req.result.blob);
         } else {
           resolve(null);
@@ -129,12 +161,51 @@ export async function getTrackAudioBlob(trackId: string): Promise<Blob | null> {
 }
 
 export async function isTrackAudioCached(trackId: string): Promise<boolean> {
+  if (memoryBlobUrlMap.has(trackId)) return true;
   try {
     const blob = await getTrackAudioBlob(trackId);
     return blob !== null && blob.size > 1000;
   } catch {
     return false;
   }
+}
+
+const directStreamUrlMemory = new Map<string, string>();
+
+export async function resolveDirectItunesAudioUrl(track: Track): Promise<string | null> {
+  if (directStreamUrlMemory.has(track.id)) {
+    return directStreamUrlMemory.get(track.id)!;
+  }
+  const cleanTitle = track.title.replace(/\([^)]*\)/g, '').trim() || track.title;
+  const queries = [`${track.artist} ${cleanTitle}`, `${track.artist} Christian`, track.artist];
+
+  for (const q of queries) {
+    try {
+      const res = await fetch(
+        `https://itunes.apple.com/search?term=${encodeURIComponent(
+          q
+        )}&media=music&entity=song&limit=8`
+      );
+      if (!res.ok) continue;
+      const data = await res.json();
+      const results = Array.isArray(data?.results) ? data.results : [];
+      const match = results.find(
+        (r: any) =>
+          r?.previewUrl &&
+          !String(`${r.trackName || ''} ${r.artistName || ''}`)
+            .toLowerCase()
+            .match(/\b(cover|karaoke|tribute|instrumental)\b/)
+      ) || results.find((r: any) => r?.previewUrl);
+
+      if (match?.previewUrl) {
+        directStreamUrlMemory.set(track.id, match.previewUrl);
+        return match.previewUrl;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null;
 }
 
 /**
@@ -145,14 +216,35 @@ export async function fetchAndCacheTrackOffline(track: Track): Promise<boolean> 
     // 1. Save metadata
     await saveTrackToIndexedDB(track);
 
-    // 2. Fetch full-length audio stream and save blob
+    // 2. Try primary full-song stream first
     const url = `/api/music/full-song?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}&id=${encodeURIComponent(track.id)}`;
-    const response = await fetch(url);
-    if (!response.ok) return false;
-    const blob = await response.blob();
-    if (blob && blob.size > 1000) {
-      await saveTrackAudioBlob(track.id, blob);
-      return true;
+    try {
+      const response = await fetch(url);
+      if (response.ok) {
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('audio') || contentType.includes('octet-stream')) {
+          const blob = await response.blob();
+          if (blob && blob.size > 10000) {
+            await saveTrackAudioBlob(track.id, blob);
+            return true;
+          }
+        }
+      }
+    } catch {
+      // fall through to direct CDN stream
+    }
+
+    // 3. Fallback to direct Apple Music CDN audio stream so caching works on static hosts too
+    const directUrl = await resolveDirectItunesAudioUrl(track);
+    if (directUrl) {
+      const resp = await fetch(directUrl);
+      if (resp.ok) {
+        const blob = await resp.blob();
+        if (blob && blob.size > 5000) {
+          await saveTrackAudioBlob(track.id, blob);
+          return true;
+        }
+      }
     }
     return false;
   } catch {
@@ -183,6 +275,23 @@ export async function downloadTrackToDevice(track: Track): Promise<void> {
     return;
   }
 
+  // Fetch & cache into blob first if possible so mobile browsers download a clean .m4a file
+  const cachedNow = await fetchAndCacheTrackOffline(track);
+  if (cachedNow) {
+    const freshBlob = await getTrackAudioBlob(track.id);
+    if (freshBlob && freshBlob.size > 1000) {
+      const blobUrl = URL.createObjectURL(freshBlob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = safeFilename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+      return;
+    }
+  }
+
   // Otherwise trigger direct file download from server with Content-Disposition attachment
   const downloadUrl = `/api/music/full-song?title=${encodeURIComponent(
     track.title
@@ -196,9 +305,6 @@ export async function downloadTrackToDevice(track: Track): Promise<void> {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-
-  // In background, also fetch and cache into IndexedDB so it works offline
-  fetchAndCacheTrackOffline(track).catch(() => {});
 }
 
 /**

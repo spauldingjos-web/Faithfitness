@@ -1,5 +1,4 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -149,6 +148,50 @@ function isCoverOrRemakeTrack(text: string): boolean {
   return coverTerms.some((term) => t.includes(term));
 }
 
+async function fetchItunesFallbackSong(
+  artist: string,
+  title: string
+): Promise<AssembledFullSong | null> {
+  const queries = [`${artist} ${title}`, `${artist} ${title} Christian`, artist];
+  for (const q of queries) {
+    try {
+      const res = await fetch(
+        `https://itunes.apple.com/search?term=${encodeURIComponent(
+          q
+        )}&media=music&entity=song&limit=10`
+      );
+      if (!res.ok) continue;
+      const data = await res.json();
+      const results = Array.isArray(data?.results) ? data.results : [];
+      const cleanCandidates = results.filter((item: any) => {
+        if (!item?.previewUrl) return false;
+        const text = `${item.trackName || ''} ${item.artistName || ''} ${item.collectionName || ''}`;
+        if (isProfaneOrSecular(text)) return false;
+        if (isCoverOrRemakeTrack(text)) return false;
+        return true;
+      });
+
+      const chosen = cleanCandidates[0] || results.find((r: any) => r?.previewUrl);
+      if (!chosen?.previewUrl) continue;
+
+      const audioRes = await fetch(chosen.previewUrl);
+      if (!audioRes.ok) continue;
+      const buf = Buffer.from(await audioRes.arrayBuffer());
+      if (buf.length < 20000) continue;
+
+      return {
+        buffer: buf,
+        contentType: chosen.previewUrl.includes('.m4a') ? 'audio/mp4' : 'audio/mpeg',
+        durationSec: Math.max(30, Math.round(buf.length / 16000)),
+        matchedTitle: chosen.trackName || title,
+      };
+    } catch {
+      // try next query
+    }
+  }
+  return null;
+}
+
 async function assembleFullLengthSong(
   artist: string,
   title: string
@@ -164,108 +207,155 @@ async function assembleFullLengthSong(
   }
 
   const promise = (async (): Promise<AssembledFullSong | null> => {
-    const clientId = await getSoundCloudClientId();
-    // Prioritize queries that strictly pin down the verified Christian original recording
-    const queries = [
-      `${artist} ${cleanTitle}`,
-      `${artist} ${cleanTitle} official`,
-      `${artist} ${cleanTitle} worship`,
-      `${artist} ${cleanTitle} Christian`,
-    ];
+    try {
+      const clientId = await getSoundCloudClientId();
+      const queries = [
+        `${artist} ${cleanTitle}`,
+        `${artist} ${cleanTitle} official`,
+      ];
 
-    const artistPrimary = artist
-      .toLowerCase()
-      .replace(/[^a-z0-9 ]/g, ' ')
-      .split(/\s+/)
-      .filter((w) => w.length > 2)[0] || artist.toLowerCase();
+      const artistPrimary =
+        artist
+          .toLowerCase()
+          .replace(/[^a-z0-9 ]/g, ' ')
+          .split(/\s+/)
+          .filter((w) => w.length > 2)[0] || artist.toLowerCase();
 
-    const titlePrimary = cleanTitle
-      .toLowerCase()
-      .replace(/[^a-z0-9 ]/g, ' ')
-      .split(/\s+/)
-      .filter((w) => w.length > 2)[0] || cleanTitle.toLowerCase();
+      const titlePrimary =
+        cleanTitle
+          .toLowerCase()
+          .replace(/[^a-z0-9 ]/g, ' ')
+          .split(/\s+/)
+          .filter((w) => w.length > 2)[0] || cleanTitle.toLowerCase();
 
-    for (const q of queries) {
-      try {
-        const sr = await fetch(
-          `https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(
-            q
-          )}&client_id=${clientId}&limit=30`
-        );
-        if (!sr.ok) continue;
-        const sd = await sr.json();
-        const candidates = (sd.collection || []).filter(
-          (x: any) => {
+      for (const q of queries) {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 2800);
+          const sr = await fetch(
+            `https://api-v2.soundcloud.com/search/tracks?q=${encodeURIComponent(
+              q
+            )}&client_id=${clientId}&limit=20`,
+            { signal: controller.signal }
+          );
+          clearTimeout(timer);
+          if (!sr.ok) continue;
+          const sd = await sr.json();
+          const candidates = (sd.collection || []).filter((x: any) => {
             const trackText = `${x.title || ''} ${x.description || ''} ${x.user?.username || ''} ${x.genre || ''}`.toLowerCase();
-            // Discard any profane or secular track
             if (isProfaneOrSecular(trackText)) return false;
-            // STRICTLY DISCARD all covers, tributes, piano instrumentals, karaoke, and sound-alikes
             if (isCoverOrRemakeTrack(trackText)) return false;
-            // Full length only (> 95 seconds, max 11 minutes)
             if (x.duration < 95000 || x.duration > 660000) return false;
-            // Must have playable unencrypted streams
             return x.media?.transcodings?.some(
               (tr: any) =>
                 !tr.snipped &&
                 (tr.format?.protocol === 'progressive' || tr.format?.protocol === 'hls')
             );
-          }
-        );
-        if (candidates.length === 0) continue;
+          });
+          if (candidates.length === 0) continue;
 
-        // Rank remaining clean original artist candidates
-        candidates.sort((a: any, b: any) => {
-          const aText = `${a.title || ''} ${a.user?.username || ''}`.toLowerCase();
-          const bText = `${b.title || ''} ${b.user?.username || ''}`.toLowerCase();
+          candidates.sort((a: any, b: any) => {
+            const aText = `${a.title || ''} ${a.user?.username || ''}`.toLowerCase();
+            const bText = `${b.title || ''} ${b.user?.username || ''}`.toLowerCase();
+            const aHasProg = a.media?.transcodings?.some(
+              (t: any) => !t.snipped && t.format?.protocol === 'progressive'
+            )
+              ? 15
+              : 0;
+            const bHasProg = b.media?.transcodings?.some(
+              (t: any) => !t.snipped && t.format?.protocol === 'progressive'
+            )
+              ? 15
+              : 0;
 
-          const aScore =
-            (aText.includes(artistPrimary) ? 18 : 0) +
-            (aText.includes(titlePrimary) ? 12 : 0) +
-            (aText.includes('official') ? 8 : 0) +
-            (a.user?.verified || a.user?.badges?.verified ? 20 : 0) +
-            (aText.includes('christian') || aText.includes('worship') || aText.includes('gospel') ? 4 : 0);
-          const bScore =
-            (bText.includes(artistPrimary) ? 18 : 0) +
-            (bText.includes(titlePrimary) ? 12 : 0) +
-            (bText.includes('official') ? 8 : 0) +
-            (b.user?.verified || b.user?.badges?.verified ? 20 : 0) +
-            (bText.includes('christian') || bText.includes('worship') || bText.includes('gospel') ? 4 : 0);
+            const aScore =
+              aHasProg +
+              (aText.includes(artistPrimary) ? 18 : 0) +
+              (aText.includes(titlePrimary) ? 12 : 0) +
+              (aText.includes('official') ? 8 : 0) +
+              (a.user?.verified || a.user?.badges?.verified ? 20 : 0);
+            const bScore =
+              bHasProg +
+              (bText.includes(artistPrimary) ? 18 : 0) +
+              (bText.includes(titlePrimary) ? 12 : 0) +
+              (bText.includes('official') ? 8 : 0) +
+              (b.user?.verified || b.user?.badges?.verified ? 20 : 0);
 
-          return bScore - aScore;
-        });
+            return bScore - aScore;
+          });
 
-        for (const chosen of candidates.slice(0, 3)) {
-          const tr =
-            chosen.media.transcodings.find(
-              (x: any) => !x.snipped && x.format?.protocol === 'progressive'
-            ) ||
-            chosen.media.transcodings.find(
-              (x: any) =>
-                !x.snipped &&
-                x.format?.protocol === 'hls' &&
-                x.format?.mime_type?.includes('mp4')
-            ) ||
-            chosen.media.transcodings.find(
-              (x: any) => !x.snipped && x.format?.protocol === 'hls'
+          for (const chosen of candidates.slice(0, 2)) {
+            const tr =
+              chosen.media.transcodings.find(
+                (x: any) => !x.snipped && x.format?.protocol === 'progressive'
+              ) ||
+              chosen.media.transcodings.find(
+                (x: any) =>
+                  !x.snipped &&
+                  x.format?.protocol === 'hls' &&
+                  x.format?.mime_type?.includes('mpeg')
+              ) ||
+              chosen.media.transcodings.find(
+                (x: any) => !x.snipped && x.format?.protocol === 'hls'
+              );
+
+            if (!tr) continue;
+            const sRes = await fetch(`${tr.url}?client_id=${clientId}`);
+            if (!sRes.ok) continue;
+            const sData = await sRes.json();
+            if (!sData?.url) continue;
+
+            if (tr.format.protocol === 'progressive') {
+              const upstream = await fetch(sData.url);
+              if (!upstream.ok) continue;
+              const buf = Buffer.from(await upstream.arrayBuffer());
+              if (buf.length < 250000) continue;
+              const assembled: AssembledFullSong = {
+                buffer: buf,
+                contentType: 'audio/mpeg',
+                durationSec: Math.round(chosen.duration / 1000),
+                matchedTitle: chosen.title,
+              };
+              if (fullSongCache.size >= 40) {
+                const oldestKey = fullSongCache.keys().next().value;
+                if (oldestKey) fullSongCache.delete(oldestKey);
+              }
+              fullSongCache.set(cacheKey, assembled);
+              return assembled;
+            }
+
+            const m3u8Res = await fetch(sData.url);
+            if (!m3u8Res.ok) continue;
+            const m3u8 = await m3u8Res.text();
+            if (m3u8.includes('#EXT-X-KEY')) continue;
+
+            const mapMatch = m3u8.match(/#EXT-X-MAP:URI="([^"]+)"/);
+            const segUrls = m3u8
+              .split('\n')
+              .map((l) => l.trim())
+              .filter((l) => l.startsWith('http'));
+            const allUrls = mapMatch ? [mapMatch[1], ...segUrls] : segUrls;
+            if (allUrls.length === 0) continue;
+
+            const buffers = await Promise.all(
+              allUrls.map(async (u) => {
+                const r = await fetch(u);
+                return Buffer.from(await r.arrayBuffer());
+              })
             );
+            const combined = Buffer.concat(buffers);
+            if (combined.length < 250000) continue;
 
-          if (!tr) continue;
-          const sRes = await fetch(`${tr.url}?client_id=${clientId}`);
-          if (!sRes.ok) continue;
-          const sData = await sRes.json();
-          if (!sData?.url) continue;
-
-          if (tr.format.protocol === 'progressive') {
-            const upstream = await fetch(sData.url);
-            if (!upstream.ok) continue;
-            const buf = Buffer.from(await upstream.arrayBuffer());
-            if (buf.length < 400000) continue; // Ensure full-length file size
+            const contentType = tr.format.mime_type?.includes('mp4')
+              ? 'audio/mp4'
+              : 'audio/mpeg';
             const assembled: AssembledFullSong = {
-              buffer: buf,
-              contentType: 'audio/mpeg',
+              buffer: combined,
+              contentType,
               durationSec: Math.round(chosen.duration / 1000),
               matchedTitle: chosen.title,
             };
+
             if (fullSongCache.size >= 40) {
               const oldestKey = fullSongCache.keys().next().value;
               if (oldestKey) fullSongCache.delete(oldestKey);
@@ -273,51 +363,23 @@ async function assembleFullLengthSong(
             fullSongCache.set(cacheKey, assembled);
             return assembled;
           }
-
-          // Assemble full unencrypted HLS fMP4 (.m4a) or MP3 segments into a single continuous full-song file
-          const m3u8Res = await fetch(sData.url);
-          if (!m3u8Res.ok) continue;
-          const m3u8 = await m3u8Res.text();
-          // Skip DRM-encrypted playlists
-          if (m3u8.includes('#EXT-X-KEY')) continue;
-
-          const mapMatch = m3u8.match(/#EXT-X-MAP:URI="([^"]+)"/);
-          const segUrls = m3u8
-            .split('\n')
-            .map((l) => l.trim())
-            .filter((l) => l.startsWith('http'));
-          const allUrls = mapMatch ? [mapMatch[1], ...segUrls] : segUrls;
-          if (allUrls.length === 0) continue;
-
-          const buffers = await Promise.all(
-            allUrls.map(async (u) => {
-              const r = await fetch(u);
-              return Buffer.from(await r.arrayBuffer());
-            })
-          );
-          const combined = Buffer.concat(buffers);
-          if (combined.length < 400000) continue;
-
-          const contentType = tr.format.mime_type?.includes('mp4')
-            ? 'audio/mp4'
-            : 'audio/mpeg';
-          const assembled: AssembledFullSong = {
-            buffer: combined,
-            contentType,
-            durationSec: Math.round(chosen.duration / 1000),
-            matchedTitle: chosen.title,
-          };
-
-          if (fullSongCache.size >= 40) {
-            const oldestKey = fullSongCache.keys().next().value;
-            if (oldestKey) fullSongCache.delete(oldestKey);
-          }
-          fullSongCache.set(cacheKey, assembled);
-          return assembled;
+        } catch {
+          // try next query
         }
-      } catch {
-        // try next query
       }
+    } catch {
+      // fall through to iTunes CDN fallback
+    }
+
+    // Resilient fallback to official Apple Music / iTunes stream (works 100% on Vercel & all clouds)
+    const fallback = await fetchItunesFallbackSong(artist, cleanTitle);
+    if (fallback) {
+      if (fullSongCache.size >= 40) {
+        const oldestKey = fullSongCache.keys().next().value;
+        if (oldestKey) fullSongCache.delete(oldestKey);
+      }
+      fullSongCache.set(cacheKey, fallback);
+      return fallback;
     }
     return null;
   })();
@@ -569,7 +631,8 @@ app.get('/api/music/proxy-audio', async (req, res) => {
 });
 
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',

@@ -26,6 +26,7 @@ export interface Track {
   keySignature: string;
   coverUrl: string;
   audioPreviewUrl?: string; // Real Apple Music / iTunes AAC stream
+  directStreamUrl?: string; // Direct global CDN stream URL for instant playback
   youtubeVideoId?: string; // Real YouTube Official Audio/Video ID for full-song playback
   youtubeCandidates?: string[]; // Embed-verified full-length YouTube Lyric & Audio IDs
   sourceOrigin: SourceOrigin;
@@ -699,6 +700,7 @@ function mapItunesItemToTrack(
     keySignature: idx % 2 === 0 ? 'D Minor' : 'G Major',
     coverUrl: hiResArtwork,
     audioPreviewUrl: fullSongStream,
+    directStreamUrl: item.previewUrl || undefined,
     sourceOrigin: 'Verified Artist',
     platformIngestedFrom: platform,
     ingestedTimestamp: 'Live Forever Stream',
