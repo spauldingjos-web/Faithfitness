@@ -444,49 +444,42 @@ class SanctuaryAudioEngine {
         // continue
       }
 
-      // 2. Retry full-length server stream without downgrading to a 29s preview clip
+      // 2. Probe full-length server stream first; only retry /api/music/full-song when healthy
       try {
         if (requestId !== this.playRequestId || !this.isPlaying) return;
-        const retryUrl = `${getFullSongStreamUrl(track)}&retry=1`;
-        const audio = this.getOrCreateAudioElement();
-        audio.src = retryUrl;
-        audio.volume = this.volume;
-        audio.load();
-        if (startOffset > 2) {
-          audio.addEventListener(
-            'canplay',
-            () => {
-              if (requestId === this.playRequestId && audio.duration > startOffset + 2) {
-                try {
-                  audio.currentTime = startOffset;
-                } catch {
-                  // ignore
-                }
-              }
-            },
-            { once: true }
-          );
-        }
-        await audio.play();
-        this.startProgressLoop();
-        return;
-      } catch {
-        // continue
-      }
-
-      // 3. Final fallback: ONLY use direct preview URL if /api/music/full-song actually returned 404/500
-      try {
         const probe = await fetch(getFullSongStreamUrl(track), { method: 'HEAD' });
+        if (requestId !== this.playRequestId || !this.isPlaying) return;
         if (probe.ok) {
+          const retryUrl = `${getFullSongStreamUrl(track)}&retry=1`;
           const audio = this.getOrCreateAudioElement();
-          audio.src = `${getFullSongStreamUrl(track)}&retry=2`;
+          audio.src = retryUrl;
           audio.volume = this.volume;
           audio.load();
-          await audio.play().catch(() => {});
+          if (startOffset > 2) {
+            audio.addEventListener(
+              'canplay',
+              () => {
+                if (requestId === this.playRequestId && audio.duration > startOffset + 2) {
+                  try {
+                    audio.currentTime = startOffset;
+                  } catch {
+                    // ignore
+                  }
+                }
+              },
+              { once: true }
+            );
+          }
+          await audio.play();
           this.startProgressLoop();
           return;
         }
+      } catch {
+        // continue to direct CDN fallback
+      }
 
+      // 3. Direct CDN fallback (plays cleanly even if serverless /api/* is offline or unreachable)
+      try {
         const directUrl =
           track.directStreamUrl ||
           this.resolvedDirectUrls.get(track.id) ||
@@ -494,9 +487,8 @@ class SanctuaryAudioEngine {
         if (requestId !== this.playRequestId || !this.isPlaying) return;
         if (directUrl) {
           this.resolvedDirectUrls.set(track.id, directUrl);
-          const proxiedUrl = `/api/music/proxy-audio?url=${encodeURIComponent(directUrl)}`;
           const audio = this.getOrCreateAudioElement();
-          audio.src = proxiedUrl;
+          audio.src = directUrl;
           audio.volume = this.volume;
           audio.load();
           await audio.play();

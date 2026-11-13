@@ -560,7 +560,7 @@ export default function App() {
     if (typeof window !== 'undefined' && 'caches' in window) {
       caches.keys().then((keys) => {
         keys.forEach((k) => {
-          if (k !== 'sanctuary-pulse-v15' && k !== 'sanctuary-audio-vault-v15') {
+          if (k !== 'sanctuary-pulse-v16' && k !== 'sanctuary-audio-vault-v16') {
             caches.delete(k).catch(() => {});
           }
         });
