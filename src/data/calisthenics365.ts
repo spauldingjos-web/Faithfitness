@@ -3,7 +3,13 @@ import { ChristianGenre } from './musicCatalog';
 export interface CalisthenicsExercise {
   id: string;
   name: string;
-  category: 'Skill & Statics' | 'Upper Pull' | 'Upper Push' | 'Core & Compression' | 'Legs & Plyo';
+  category:
+    | 'Warm-Up & Flow'
+    | 'Back & Posture'
+    | 'Upper Push'
+    | 'Core & Sculpt'
+    | 'Legs & Glutes'
+    | 'Optional Dumbbells';
   sets: number;
   repsOrHold: string;
   restSeconds: number;
@@ -37,14 +43,14 @@ export interface CalisthenicsDayPlan {
   dayOfWeekLabel: string;
   workoutTitle: string;
   focusArea:
-    | 'Push & Planche Mechanics'
-    | 'Pull & Front Lever Armor'
-    | 'Legs, Pistol & Core Compression'
-    | 'Bike Cadence & Endurance Ride'
-    | 'Muscle-Up & Ring Transitions'
-    | 'Spartan Full-Body Gauntlet'
-    | 'Active Recovery, Mobility & Deep Selah';
-  difficultyBadge: 'Foundation' | 'Intermediate' | 'Advanced' | 'Elite Spartan';
+    | 'Upper Push, Chest & Arm Tone'
+    | 'Back Posture, Shoulders & Light Tone'
+    | 'Legs, Glutes & Core Sculpt'
+    | 'Cardio Burn & Optional Bike Ride'
+    | 'Arms, Core & Optional Dumbbell Finishers'
+    | 'Full-Body Toning Circuit'
+    | 'Active Recovery, Stretch & Deep Selah';
+  difficultyBadge: 'Beginner' | 'Tone Builder' | 'Sculpt & Strength' | 'Full Definition';
   estimatedMinutes: number;
   targetBpm: number;
   recommendedGenre: Exclude<ChristianGenre, 'all'>;
@@ -64,124 +70,211 @@ const SCRIPTURE_VAULT: {
   {
     ref: '1 Corinthians 9:25–27',
     text: 'Everyone who competes in the games goes into strict training. They do it to get a crown that will not last, but we do it to get a crown that will last forever.',
-    title: 'The Discipline of the Unseen Rep',
+    title: 'Small Faithful Steps Build Real Strength',
     reflection:
-      'Calisthenics exposes every weakness because you carry your own weight. Nobody can do the pull-up for you, and nobody can walk your spiritual walk for you. When you hold a hollow body or lock out your final dip with clean form, you are training your mind to choose obedience over comfort.',
+      'You do not need fancy equipment or extreme workouts to honor your body. Showing up on your living room floor with steady squats, controlled push-ups, and clean breathing trains your mind to choose consistency over excuses.',
     prayer:
-      'Lord, forge steadfastness in my body and spirit today. Let every strict repetition remind me that endurance builds character.',
-    challenge: 'Zerokip Rule: Complete every eccentric (lowering) phase for a full 3 seconds today—no rushing through discomfort.',
+      'Lord, build quiet consistency in my body and spirit today. Let every steady repetition remind me that small daily obedience adds up.',
+    challenge: 'Slow & Steady Rule: Lower slowly for 2–3 seconds on every rep today instead of rushing through.',
   },
   {
     ref: '2 Samuel 22:34–35',
     text: 'He makes my feet like the feet of a deer; He causes me to stand on the heights. He trains my hands for battle; my arms can bend a bow of bronze.',
-    title: 'Hands Trained for the Heights',
+    title: 'Steady Ground & Everyday Strength',
     reflection:
-      'Strength is not for vanity; it is for readiness and service. Whether gripping cold steel on a pull-up bar, stabilizing on wooden rings, or climbing a steep grade on your bike, God honors the stewardship of the strength He has entrusted to you.',
+      'Strength is not for showing off; it is for energy, posture, and readiness to serve others well. Whether holding a calm floor plank, stepping into lunges, or going for a brisk walk, God honors the care you put into the frame He gave you.',
     prayer:
-      'Father, strengthen my grip, my core, and my resolve so I can carry heavy burdens for those around me without faltering.',
-    challenge: 'Add a 20-second dead-hang or active scapula hang at the end of your workout while reciting today’s verse.',
+      'Father, steady my posture, strengthen my core, and give me energy to serve my family and community today.',
+    challenge: 'Finish your session with a calm 20-second posture hold (standing tall or forearm plank) while reciting today’s verse.',
   },
   {
     ref: 'Hebrews 12:1–2',
     text: 'Let us throw off everything that hinders and the sin that so easily entangles. And let us run with perseverance the race marked out for us.',
-    title: 'Cadence Through Resistance',
+    title: 'Rhythm Over Rush',
     reflection:
-      'On a bike climb or in the middle of a high-rep calisthenics circuit, extra weight and wasted motion immediately slow your cadence. Spiritual maturity works the same way: stripping away distraction so your energy flows cleanly toward the mark.',
+      'During a steady walk, bike spin, or bodyweight circuit, trying to sprint from second one burns you out early. Spiritual endurance works the same way: find a sustainable pace, breathe evenly, and keep moving forward.',
     prayer:
-      'Jesus, strip away mental clutter and fatigue today. Set my rhythm to Your grace as I press through today’s session.',
-    challenge: 'Hold a steady nasal breathing cadence during your warmup and first two working sets.',
+      'Jesus, quiet the rush and comparison in my mind today. Set my rhythm to Your grace as I move through this workout.',
+    challenge: 'Keep smooth, relaxed nasal breathing during your warm-up and first two exercises.',
   },
   {
     ref: 'Isaiah 40:29–31',
     text: 'He gives strength to the weary and increases the power of the weak. Even youths grow tired and weary, and young men stumble and fall; but those who hope in the Lord will renew their strength.',
-    title: 'Second Wind in the Fourth Set',
+    title: 'Renewed Strength Set by Set',
     reflection:
-      'Natural motivation fades around Week 3, or right when lactic acid hits your forearms. Renewed strength comes when your training is anchored in worship rather than ego. Let the music lift your focus off the burn and onto gratitude.',
+      'Motivation naturally dips after the first couple of weeks when legs feel heavy or arms start to tone up. Lasting energy comes when training is rooted in worship and gratitude rather than perfection.',
     prayer:
-      'Lord, be my second wind today. When my muscles tremble in the hold, quiet my mind in Your presence.',
-    challenge: 'Between sets during your rest timer, keep your phone down and spend 30 seconds in gratitude.',
+      'Lord, be my strength today. When muscles start to feel tired, remind me to breathe, stay patient, and thank You for progress.',
+    challenge: 'During rest breaks today, put your phone down and take three slow, grateful breaths.',
   },
   {
     ref: 'Proverbs 24:10',
     text: 'If you falter in a time of trouble, how small is your strength!',
-    title: 'Forged Under Tension',
+    title: 'Calm Under Gentle Tension',
     reflection:
-      'Isometric holds like the L-sit, front lever, and planche teach a profound truth: stillness under high tension requires more strength than frantic movement. Peace in trials is spiritual isometric strength.',
+      'Simple floor holds like planks, wall sits, and glute bridges teach a helpful lesson: staying calm and steady while muscles work takes more focus than rushing. Inner peace works the very same way.',
     prayer:
-      'God of Peace, teach me to hold my ground with calm, unshakable composure when pressure mounts.',
-    challenge: 'Accumulate 60 total seconds of strict L-sit or hollow-body hold today without dropping tension.',
+      'God of Peace, teach me to stay calm, steady, and grounded when life feels demanding.',
+    challenge: 'Keep your shoulders relaxed away from your ears during every plank or bridge hold today.',
   },
   {
     ref: 'Philippians 3:13–14',
     text: 'Forgetting what is behind and straining toward what is ahead, I press on toward the goal to win the prize for which God has called me heavenward in Christ Jesus.',
-    title: 'Forward Lean & Full Commitment',
+    title: 'Progress Over Perfection',
     reflection:
-      'In a pseudo-planche push-up, your shoulders must lean forward past your wrists—you cannot advance while leaning back in safety. Stepping into growth requires leaning forward past yesterday’s comfort zone.',
+      'If a push-up starts against a wall or on your knees today, that is right where strong foundations begin. Every week you grow a little steadier, tone a little deeper, and build confidence for the next step.',
     prayer:
-      'Lord, give me the courage to lean forward into the calling You placed before me today, leaving yesterday’s excuses behind.',
-    challenge: 'Measure your forward shoulder lean on push-ups today and hold the top protraction for 2 full seconds.',
+      'Lord, thank You for meeting me right where I am today while gently growing me stronger tomorrow.',
+    challenge: 'Focus on clean, comfortable range of motion today—never force pain, just aim for one extra clean rep.',
   },
   {
     ref: 'Psalm 144:1',
     text: 'Praise be to the Lord my Rock, who trains my hands for war, my fingers for battle.',
-    title: 'Sabbath Mobility & Temple Stewardship',
+    title: 'Rest, Mobility & Temple Care',
     reflection:
-      'Recovery, joint integrity, and tendon conditioning are what allow a 365-day athlete to stay unbroken all year. Honoring rest and deep tissue mobility is an act of humility and long-term vision.',
+      'Gentle stretching, walking, and recovery days are where your muscles actually rebuild and tone up. Honoring rest keeps your joints happy so you can stay consistent all 365 days of the year.',
     prayer:
-      'Creator of my frame, restore my joints, tendons, and nervous system as I stretch and meditate on Your Word.',
-    challenge: 'Complete 15 minutes of thoracic spine, wrist, and hip mobility while listening to Worship & Gospel R&B.',
+      'Creator of my frame, refresh my joints, relax tight muscles, and restore my mind as I rest in Your Word.',
+    challenge: 'Spend 10–15 relaxed minutes stretching your hips, shoulders, and back while listening to Worship.',
   },
 ];
 
-const PHASES: {
+interface PhaseConfig {
   quarter: 1 | 2 | 3 | 4;
   title: string;
   difficulty: CalisthenicsDayPlan['difficultyBadge'];
   pushMove: [string, string, string];
-  pullMove: [string, string, string];
-  skillMove: [string, string, string];
+  backMove: [string, string, string];
   legMove: [string, string, string];
   coreMove: [string, string, string];
-}[] = [
+  toneMove: [string, string, string];
+  cardioMove: [string, string];
+}
+
+const PHASES: PhaseConfig[] = [
   {
     quarter: 1,
-    title: 'Phase I (Days 1–90): Strict Bodyweight Armor & Joint Conditioning',
-    difficulty: 'Foundation',
-    pushMove: ['Strict Scapular & Diamond Push-Ups', 'Parallel Bar Dips (Full Lockout)', 'Pike Push-Ups (Elevated Feet)'],
-    pullMove: ['Strict Chin-Ups & Pull-Ups (Chest to Bar)', 'Australian Ring/Bar Rows (Feet Elevated)', 'Scapular Pulls & 30s Active Dead Hang'],
-    skillMove: ['Tuck L-Sit Hold on Parallettes/Floor', 'Frog Stand / Crow Balance', 'Wall Handstand Chest-to-Wall Hold'],
-    legMove: ['Assisted Pistol Squats (Box/Ring)', 'Bulgarian Split Squats (Explosive)', 'Nordic Hamstring Eccentrics'],
-    coreMove: ['Hollow Body Rocks & Hold', 'Hanging Knee-to-Chest Raises', 'Plank Protraction Saw'],
+    title: 'Phase I (Days 1–90): Beginner Foundation & Joint Awakening',
+    difficulty: 'Beginner',
+    pushMove: [
+      'Wall Push-Ups (Gentle Incline)',
+      'Modified Knee Push-Ups (Slow Control)',
+      'Standing Wall Shoulder Taps & Press',
+    ],
+    backMove: [
+      'Scapular Wall Slides (Upper Back & Posture)',
+      'Prone Floor W-Squeeze (No Equipment Back Tone)',
+      'Standing Bent-Over Y-T Raises (Optional Light Dumbbells or Bodyweight)',
+    ],
+    legMove: [
+      'Box / Chair-Depth Bodyweight Squats (No Chair Needed)',
+      'Floor Glute Bridges (2-Second Top Squeeze)',
+      'Supported Reverse Step-Back Lunges',
+    ],
+    coreMove: [
+      'Knee Forearm Plank Hold',
+      'Lying Dead Bug (Slow Opposite Arm & Leg)',
+      'Bird-Dog Balance Hold',
+    ],
+    toneMove: [
+      'Standing Arm Circles & Bicep Pulse (Optional Light Dumbbells)',
+      'Floor Tricep Dip Prep (Hips Low, Bent Knees)',
+      'Standing Lateral Raises (Optional Light Dumbbells or Isometric Squeeze)',
+    ],
+    cardioMove: ['Low-Impact Marching High Knees', 'Step-Out Jumping Jacks (No Jump Option)'],
   },
   {
     quarter: 2,
-    title: 'Phase II (Days 91–180): Explosive Power & Handstand Mastery',
-    difficulty: 'Intermediate',
-    pushMove: ['Pseudo Planche Push-Ups (30° Lean)', 'Deep Ring Dips (RTO Turnout)', 'Wall Handstand Push-Ups (Strict)'],
-    pullMove: ['Explosive High Pull-Ups (Waist/Sternum)', 'Archer Pull-Ups (Bar or Rings)', 'Tuck Front Lever Pulls'],
-    skillMove: ['Strict L-Sit Hold (Legs Straight)', 'Freestanding Handstand Kick-Ups', 'Tuck Planche Hold on Parallettes'],
-    legMove: ['Strict Unassisted Pistol Squats', 'Explosive Jump Switch Lunges', 'Single-Leg Hip Thrusts (Paused)'],
-    coreMove: ['Strict Toes-to-Bar (Zero Kip)', 'Dragon Flag Tuck Negatives', 'Windshield Wipers (Hanging)'],
+    title: 'Phase II (Days 91–180): Lean Tone Builder & Core Sculpting',
+    difficulty: 'Tone Builder',
+    pushMove: [
+      'Incline or Standard Push-Ups (Clean Form)',
+      'Slow Knee-to-Toes Push-Up Combos',
+      'Elevated-Hip Pike Push-Up Prep',
+    ],
+    backMove: [
+      'Prone Superman Lift & Swim (Upper & Lower Back Tone)',
+      'Bent-Over Dumbbell Rows (Optional Dumbbells — or Prone Floor Pulls)',
+      'Floor Snow Angels (Shoulder & Posture Sculpt)',
+    ],
+    legMove: [
+      'Full-Depth Bodyweight Squats (with 1s Pause)',
+      'Alternating Forward & Reverse Lunges',
+      'Single-Leg Glute Bridges (Alternating)',
+    ],
+    coreMove: [
+      'Full Toes Forearm Plank Hold',
+      'Slow Bicycle Crunches (Controlled Twist)',
+      'Side Plank Hold (Knees Bent or Straight)',
+    ],
+    toneMove: [
+      'Dumbbell Curl to Overhead Press (Optional Light Dumbbells or Bodyweight)',
+      'Push-Up Shoulder Taps (Core & Arm Stability)',
+      'Reverse Squat + Overhead Reach',
+    ],
+    cardioMove: ['Rhythmic Jumping Jacks', 'Shadow Boxing & Squat Pulses'],
   },
   {
     quarter: 3,
-    title: 'Phase III (Days 181–270): Bar & Ring Muscle-Ups + Lever Progressions',
-    difficulty: 'Advanced',
-    pushMove: ['Straight Bar Dips (Muscle-Up Lockout)', 'Ring Bulgarian Dips', 'Freestanding / Deep Pike HSPU'],
-    pullMove: ['Bar Muscle-Up Transitions & Negatives', 'False-Grip Ring Pull-Ups', 'Advanced Tuck Front Lever Hold'],
-    skillMove: ['Bar / Ring Muscle-Up Skill Sets', 'Advanced Tuck Planche Hold', 'V-Sit Compression Hold'],
-    legMove: ['Weighted / Tempo Pistol Squats (4s Down)', 'Shrimp Squats (Both Hands Behind)', 'Plyo Box / Broad Jumps'],
-    coreMove: ['Full Dragon Flags (Strict)', 'Hanging L-Sit to Toes-to-Bar', 'Ab-Wheel / Ring Rollouts'],
+    title: 'Phase III (Days 181–270): Athletic Toning & Deep Control',
+    difficulty: 'Sculpt & Strength',
+    pushMove: [
+      'Tempo Push-Ups (3 Seconds Lowering)',
+      'Close-Grip / Diamond Push-Ups (Tricep Tone)',
+      'Pike Shoulder Push-Ups (Floor)',
+    ],
+    backMove: [
+      'Single-Arm Bent-Over Dumbbell Row (Optional Dumbbell or Isometric Towel Pull)',
+      'Prone Superman Holds + W-Pulls',
+      'Reverse Plank Bridge (Posterior Chain & Shoulders)',
+    ],
+    legMove: [
+      'Goblet Squats (Optional Dumbbell or Bodyweight Pulse Squats)',
+      'Split Squat Pulses (No Bench Needed)',
+      'Lateral Side Lunges (Inner Thigh & Glute Tone)',
+    ],
+    coreMove: [
+      'Hollow Body Hold & Flutter Kicks',
+      'Forearm Plank Hip Dips',
+      'Jackknife / Seated V-Tucks (Hands Free Option)',
+    ],
+    toneMove: [
+      'Dumbbell Hammer Curls & Lateral Raise Superset (Optional Dumbbells or Fast Iso-Holds)',
+      'Inchworm Walkout to Push-Up',
+      'Wall Sit Isometric Hold (Thigh Tone)',
+    ],
+    cardioMove: ['Slow-to-Fast Mountain Climbers', 'Soft-Landing Squat Jumps (or Fast Air Squats)'],
   },
   {
     quarter: 4,
-    title: 'Phase IV (Days 271–365): Elite Spartan Statics & Full Mastery',
-    difficulty: 'Elite Spartan',
-    pushMove: ['90-Degree Push-Up Progressions', 'RTO 45° Ring Dips', 'Planche Lean Push-Ups (Paused)'],
-    pullMove: ['Strict Bar & Ring Muscle-Ups', 'One-Arm Chin-Up Eccentrics / Assisted', 'Straddle Front Lever Rows'],
-    skillMove: ['Straddle / Full Front Lever Holds', 'Straddle Planche / Maltese Prep', 'One-Arm Handstand Wall Shifts'],
-    legMove: ['Dragon Pistol Squats', 'Explosive Single-Leg Box Jumps', 'Isometric Horse Stance (3 Min)'],
-    coreMove: ['Strict Straight-Body Dragon Flags', 'Victorian Cross Core Compression', 'Hanging Front Lever Raises'],
+    title: 'Phase IV (Days 271–365): Full-Body Definition & Stamina',
+    difficulty: 'Full Definition',
+    pushMove: [
+      'Archer Push-Up Progressions (Side-to-Side)',
+      'Dive-Bomber / Flow Push-Ups',
+      'Deep Pike Shoulder Push-Ups (or Wall Hold)',
+    ],
+    backMove: [
+      'Plank Renegade Rows (Optional Dumbbells — or Slow Plank Shoulder Taps)',
+      'Prone Back-Extension Swimmers & Squeeze Hold',
+      'Dumbbell Curl, Press & Rear-Delt Flow (Optional Dumbbells or Bodyweight)',
+    ],
+    legMove: [
+      'Single-Leg Skater Squat Prep (Touch Floor Lightly)',
+      'Split-Stance Lunge Switches (Low-Impact Option Available)',
+      'Deep Sumo Squat Pulses + Calf Raise',
+    ],
+    coreMove: [
+      'Hollow Body Rocks & Strict Hold',
+      'Full V-Ups / V-Sit Compression Hold',
+      'Long-Lever Plank Body Saw',
+    ],
+    toneMove: [
+      'Dumbbell Squat-to-Press Thrusters (Optional Dumbbells or Squat-to-Reach)',
+      'Push-Up + Side Plank Rotation',
+      '60s Wall Sit with Alternating Heel Raises',
+    ],
+    cardioMove: ['Step-Back or Full Burpee Flow', 'Bear Crawl Forward & Back (Full Body Tone)'],
   },
 ];
 
@@ -193,13 +286,13 @@ const DAY_TYPES: {
   targetBpm: number;
   minutes: number;
 }[] = [
-  { dayIndex: 0, label: 'Day 1 · Mon', focusArea: 'Push & Planche Mechanics', genre: 'rock', targetBpm: 152, minutes: 48 },
-  { dayIndex: 1, label: 'Day 2 · Tue', focusArea: 'Pull & Front Lever Armor', genre: 'hiphop', targetBpm: 148, minutes: 50 },
-  { dayIndex: 2, label: 'Day 3 · Wed', focusArea: 'Legs, Pistol & Core Compression', genre: 'workout-edm', targetBpm: 162, minutes: 45 },
-  { dayIndex: 3, label: 'Day 4 · Thu', focusArea: 'Bike Cadence & Endurance Ride', genre: 'hiphop', targetBpm: 138, minutes: 55 },
-  { dayIndex: 4, label: 'Day 5 · Fri', focusArea: 'Muscle-Up & Ring Transitions', genre: 'rock', targetBpm: 156, minutes: 52 },
-  { dayIndex: 5, label: 'Day 6 · Sat', focusArea: 'Spartan Full-Body Gauntlet', genre: 'rock', targetBpm: 160, minutes: 60 },
-  { dayIndex: 6, label: 'Day 7 · Sun', focusArea: 'Active Recovery, Mobility & Deep Selah', genre: 'rnb', targetBpm: 94, minutes: 35 },
+  { dayIndex: 0, label: 'Day 1 · Mon', focusArea: 'Upper Push, Chest & Arm Tone', genre: 'rock', targetBpm: 124, minutes: 24 },
+  { dayIndex: 1, label: 'Day 2 · Tue', focusArea: 'Back Posture, Shoulders & Light Tone', genre: 'hiphop', targetBpm: 120, minutes: 25 },
+  { dayIndex: 2, label: 'Day 3 · Wed', focusArea: 'Legs, Glutes & Core Sculpt', genre: 'workout-edm', targetBpm: 128, minutes: 26 },
+  { dayIndex: 3, label: 'Day 4 · Thu', focusArea: 'Cardio Burn & Optional Bike Ride', genre: 'hiphop', targetBpm: 132, minutes: 28 },
+  { dayIndex: 4, label: 'Day 5 · Fri', focusArea: 'Arms, Core & Optional Dumbbell Finishers', genre: 'rock', targetBpm: 126, minutes: 25 },
+  { dayIndex: 5, label: 'Day 6 · Sat', focusArea: 'Full-Body Toning Circuit', genre: 'workout-edm', targetBpm: 130, minutes: 30 },
+  { dayIndex: 6, label: 'Day 7 · Sun', focusArea: 'Active Recovery, Stretch & Deep Selah', genre: 'rnb', targetBpm: 90, minutes: 18 },
 ];
 
 export function getCalisthenicsDayPlan(dayNumber: number): CalisthenicsDayPlan {
@@ -211,342 +304,374 @@ export function getCalisthenicsDayPlan(dayNumber: number): CalisthenicsDayPlan {
   const dayType = DAY_TYPES[dow];
   const scripture = SCRIPTURE_VAULT[(clampedDay - 1) % SCRIPTURE_VAULT.length];
 
-  // Progressive rep/hold scaling across each 90-day quarter
+  // Smooth progression within each 90-day quarter AND across quarters
   const dayInQuarter = ((clampedDay - 1) % 90) + 1;
-  const progressionBonusSets = dayInQuarter > 60 ? 1 : 0;
-  const baseSets = 4 + progressionBonusSets;
-  const holdSeconds = 15 + Math.floor(dayInQuarter / 6) * 2;
-  const repCount = 8 + Math.floor(dayInQuarter / 10);
+
+  // Sets grow gently: Q1 starts at 2 sets (first 4 weeks), then 3 sets. Q2: 3->4, Q3: 3->4, Q4: 4->5
+  const baseSets =
+    quarterIdx === 0
+      ? dayInQuarter <= 28
+        ? 2
+        : 3
+      : quarterIdx === 1
+      ? dayInQuarter > 60
+        ? 4
+        : 3
+      : quarterIdx === 2
+      ? dayInQuarter > 45
+        ? 4
+        : 3
+      : dayInQuarter > 60
+      ? 5
+      : 4;
+
+  // Reps & Holds ramp gently from beginner-friendly (6-8 reps / 15s) up to toning endurance (14-18 reps / 45-55s)
+  const repBase = quarterIdx === 0 ? 6 : quarterIdx === 1 ? 9 : quarterIdx === 2 ? 11 : 12;
+  const repCount = repBase + Math.floor(dayInQuarter / 18); // +0 to +5 over 90 days
+
+  const holdBase = quarterIdx === 0 ? 15 : quarterIdx === 1 ? 25 : quarterIdx === 2 ? 32 : 40;
+  const holdSeconds = holdBase + Math.floor(dayInQuarter / 15) * 3;
+
+  // Estimated minutes grows gently from ~20 min in early beginner weeks to ~40 min in Quarter 4
+  const estimatedMinutes =
+    dayType.focusArea === 'Active Recovery, Stretch & Deep Selah'
+      ? 18
+      : dayType.minutes + quarterIdx * 5 + (dayInQuarter > 45 ? 3 : 0);
+
+  // Target music BPM scales mildly with intensity
+  const targetBpm = dayType.focusArea === 'Active Recovery, Stretch & Deep Selah' ? 90 : dayType.targetBpm + quarterIdx * 6;
+
+  // Beginner-friendly rest timers (shorter brisk 45s in Q1/circuits, 60s on strength sets)
+  const strengthRest = quarterIdx === 0 ? 45 : 60;
 
   let exercises: CalisthenicsExercise[] = [];
 
-  if (dayType.focusArea === 'Push & Planche Mechanics') {
+  if (dayType.focusArea === 'Upper Push, Chest & Arm Tone') {
     exercises = [
       {
         id: `d${clampedDay}-ex1`,
-        name: phase.skillMove[2],
-        category: 'Skill & Statics',
-        sets: 4,
-        repsOrHold: `${holdSeconds}s strict hold`,
-        restSeconds: 75,
-        tempo: 'Isometric Lock',
-        equipment: 'Floor / Parallettes',
-        formCue: 'Protract shoulder blades hard, lock elbows, posterior pelvic tilt.',
-      },
-      {
-        id: `d${clampedDay}-ex2`,
         name: phase.pushMove[0],
         category: 'Upper Push',
         sets: baseSets,
-        repsOrHold: `${repCount} strict reps`,
-        restSeconds: 90,
-        tempo: '3-1-1-1',
-        equipment: 'Floor / Parallettes',
-        formCue: 'Keep elbows tucked 45°, lean shoulders forward past wrists at bottom.',
-      },
-      {
-        id: `d${clampedDay}-ex3`,
-        name: phase.pushMove[1],
-        category: 'Upper Push',
-        sets: baseSets,
-        repsOrHold: `${repCount + 2} reps`,
-        restSeconds: 90,
-        tempo: '2-1-1-1',
-        equipment: 'Parallel Bars / Rings',
-        formCue: 'Break 90° depth cleanly, depress shoulders at top lockout.',
-      },
-      {
-        id: `d${clampedDay}-ex4`,
-        name: phase.pushMove[2],
-        category: 'Upper Push',
-        sets: 4,
-        repsOrHold: `${Math.max(6, repCount - 2)} reps`,
-        restSeconds: 90,
-        tempo: '3-0-1-1',
-        equipment: 'Wall / Box',
-        formCue: 'Head forms a tripod triangle in front of hands; press vertically.',
-      },
-      {
-        id: `d${clampedDay}-ex5`,
-        name: phase.coreMove[0],
-        category: 'Core & Compression',
-        sets: 3,
-        repsOrHold: `${holdSeconds + 15}s hold`,
-        restSeconds: 60,
-        tempo: 'Strict Tension',
-        equipment: 'Floor',
-        formCue: 'Lower back glued to floor; ribs pulled down to hips.',
-      },
-    ];
-  } else if (dayType.focusArea === 'Pull & Front Lever Armor') {
-    exercises = [
-      {
-        id: `d${clampedDay}-ex1`,
-        name: phase.pullMove[2],
-        category: 'Skill & Statics',
-        sets: 4,
-        repsOrHold: `${holdSeconds}s hold / 6 pulls`,
-        restSeconds: 90,
-        tempo: 'Controlled Isometric',
-        equipment: 'Pull-Up Bar / Rings',
-        formCue: 'Straight arms, depress lats, engage glutes and core horizontally.',
+        repsOrHold: `${repCount} controlled reps`,
+        restSeconds: strengthRest,
+        tempo: '2-1-1-0',
+        equipment: quarterIdx === 0 ? 'No Equipment (Wall or Floor)' : 'No Equipment (Floor / Mat)',
+        formCue: 'Keep core engaged like a straight plank, elbows tucked slightly back at 45°.',
       },
       {
         id: `d${clampedDay}-ex2`,
-        name: phase.pullMove[0],
-        category: 'Upper Pull',
+        name: phase.pushMove[1],
+        category: 'Upper Push',
         sets: baseSets,
-        repsOrHold: `${repCount} chest-to-bar reps`,
-        restSeconds: 90,
-        tempo: '2-1-1-1',
-        equipment: 'Pull-Up Bar',
-        formCue: 'Start from dead hang, drive elbows down to ribs, zero kipping.',
+        repsOrHold: `${Math.max(5, repCount - 1)} reps`,
+        restSeconds: strengthRest,
+        tempo: '2-0-1-1',
+        equipment: 'No Equipment (Floor / Mat)',
+        formCue: 'Lower chest smoothly with zero hip sag; pause softly if needed to stay clean.',
       },
       {
         id: `d${clampedDay}-ex3`,
-        name: phase.pullMove[1],
-        category: 'Upper Pull',
-        sets: 4,
-        repsOrHold: `${repCount} reps per side/set`,
-        restSeconds: 75,
+        name: phase.pushMove[2],
+        category: 'Upper Push',
+        sets: Math.max(2, baseSets - 1),
+        repsOrHold: `${repCount} reps`,
+        restSeconds: 45,
+        tempo: 'Steady Rhythm',
+        equipment: 'No Equipment (Wall / Floor)',
+        formCue: 'Keep shoulders down away from your ears and breathe out as you press.',
+      },
+      {
+        id: `d${clampedDay}-ex4`,
+        name: phase.coreMove[0],
+        category: 'Core & Sculpt',
+        sets: Math.max(2, baseSets - 1),
+        repsOrHold: `${holdSeconds}s calm hold`,
+        restSeconds: 45,
+        tempo: 'Steady Hold',
+        equipment: 'No Equipment (Floor / Mat)',
+        formCue: 'Squeeze glutes lightly, tuck ribs gently toward hips, and breathe smoothly.',
+      },
+    ];
+  } else if (dayType.focusArea === 'Back Posture, Shoulders & Light Tone') {
+    exercises = [
+      {
+        id: `d${clampedDay}-ex1`,
+        name: phase.backMove[0],
+        category: 'Back & Posture',
+        sets: baseSets,
+        repsOrHold: `${repCount + 2} slow reps`,
+        restSeconds: 45,
+        tempo: '2-2-1-0',
+        equipment: quarterIdx === 0 ? 'No Equipment (Wall)' : 'No Equipment (Floor / Mat)',
+        formCue: 'Feel your upper back muscles gently pinching shoulder blades together.',
+      },
+      {
+        id: `d${clampedDay}-ex2`,
+        name: phase.backMove[1],
+        category: 'Back & Posture',
+        sets: baseSets,
+        repsOrHold: `${repCount} reps`,
+        restSeconds: strengthRest,
         tempo: '2-1-2-0',
-        equipment: 'Rings / Low Bar',
-        formCue: 'Squeeze shoulder blades together for 1 full second at top.',
+        equipment:
+          quarterIdx >= 1 && quarterIdx <= 2
+            ? 'Optional Light Dumbbells (or No Weight)'
+            : 'No Equipment (Floor / Mat)',
+        formCue: 'Hinge gently or lift chest just off mat with neck long—never strain the lower back.',
+      },
+      {
+        id: `d${clampedDay}-ex3`,
+        name: phase.backMove[2],
+        category: quarterIdx === 0 || quarterIdx === 3 ? 'Optional Dumbbells' : 'Back & Posture',
+        sets: Math.max(2, baseSets - 1),
+        repsOrHold: `${repCount + 2} reps`,
+        restSeconds: 45,
+        tempo: 'Controlled Squeeze',
+        equipment:
+          quarterIdx === 0 || quarterIdx === 3
+            ? 'Optional Light Dumbbells (or Bodyweight)'
+            : 'No Equipment (Floor / Mat)',
+        formCue: 'Light weights or just squeezing your fists creates clean tone along shoulders and upper back.',
       },
       {
         id: `d${clampedDay}-ex4`,
         name: phase.coreMove[1],
-        category: 'Core & Compression',
-        sets: 4,
-        repsOrHold: `${repCount + 2} strict reps`,
-        restSeconds: 60,
-        tempo: '2-1-2-0',
-        equipment: 'Pull-Up Bar',
-        formCue: 'Zero swing; curl pelvis upward using lower abs and hip flexors.',
+        category: 'Core & Sculpt',
+        sets: Math.max(2, baseSets - 1),
+        repsOrHold: `${repCount + 2} alternating reps`,
+        restSeconds: 45,
+        tempo: 'Slow Control',
+        equipment: 'No Equipment (Floor / Mat)',
+        formCue: 'Keep lower back gently pressed against the floor as legs extend.',
       },
     ];
-  } else if (dayType.focusArea === 'Legs, Pistol & Core Compression') {
+  } else if (dayType.focusArea === 'Legs, Glutes & Core Sculpt') {
     exercises = [
       {
         id: `d${clampedDay}-ex1`,
-        name: phase.skillMove[0],
-        category: 'Skill & Statics',
-        sets: 4,
-        repsOrHold: `${holdSeconds}s L-Sit compression`,
-        restSeconds: 60,
-        tempo: 'Isometric Lock',
-        equipment: 'Parallettes / Floor',
-        formCue: 'Push shoulders down away from ears; lock knees and point toes.',
-      },
-      {
-        id: `d${clampedDay}-ex2`,
         name: phase.legMove[0],
-        category: 'Legs & Plyo',
+        category: 'Legs & Glutes',
         sets: baseSets,
-        repsOrHold: `${Math.max(6, repCount - 2)} reps each leg`,
-        restSeconds: 90,
-        tempo: '3-1-1-0',
-        equipment: 'Bodyweight',
-        formCue: 'Keep heel planted flat; control knee tracking over toes.',
+        repsOrHold: `${repCount + 2} reps`,
+        restSeconds: strengthRest,
+        tempo: '2-1-1-0',
+        equipment: quarterIdx === 2 ? 'Optional Dumbbell (or Bodyweight)' : 'No Equipment (Floor)',
+        formCue: 'Keep heels flat on the floor and sit hips back smoothly like sitting into a chair.',
       },
       {
-        id: `d${clampedDay}-ex3`,
+        id: `d${clampedDay}-ex2`,
         name: phase.legMove[1],
-        category: 'Legs & Plyo',
-        sets: 4,
-        repsOrHold: `${repCount + 4} reps`,
-        restSeconds: 75,
-        tempo: 'Explosive Concentric',
-        equipment: 'Bodyweight / Bench',
-        formCue: 'Drive forcefully through mid-foot; land softly with bent knee.',
+        category: 'Legs & Glutes',
+        sets: baseSets,
+        repsOrHold: `${repCount} reps`,
+        restSeconds: 45,
+        tempo: '2-2-1-0',
+        equipment: 'No Equipment (Floor / Mat)',
+        formCue: 'Push through heels and squeeze glutes cleanly at the top without arching lower back.',
       },
       {
-        id: `d${clampedDay}-ex4`,
+        id: `d${clampedDay}-ex3`,
         name: phase.legMove[2],
-        category: 'Legs & Plyo',
-        sets: 3,
-        repsOrHold: `${repCount} slow reps`,
-        restSeconds: 75,
-        tempo: '4-0-1-0',
-        equipment: 'Floor Anchor',
-        formCue: 'Keep hips extended straight from knees to shoulders.',
-      },
-    ];
-  } else if (dayType.focusArea === 'Bike Cadence & Endurance Ride') {
-    exercises = [
-      {
-        id: `d${clampedDay}-ex1`,
-        name: 'Cadence Warm-Up Spin + Scapular Bar Decompression',
-        category: 'Skill & Statics',
-        sets: 2,
-        repsOrHold: '5 min spin + 45s dead hang',
+        category: 'Legs & Glutes',
+        sets: Math.max(2, baseSets - 1),
+        repsOrHold: `${Math.max(6, repCount - 2)} reps each leg`,
         restSeconds: 45,
-        tempo: '90 RPM Smooth',
-        equipment: 'Road/Stationary Bike + Bar',
-        formCue: 'Open chest, relax grip on handlebars, steady nasal breathing.',
-      },
-      {
-        id: `d${clampedDay}-ex2`,
-        name: 'Hill Climb Standing Sprints (Music BPM Synced)',
-        category: 'Legs & Plyo',
-        sets: 6,
-        repsOrHold: '90s standing climb / 60s saddle recovery',
-        restSeconds: 60,
-        tempo: '75–85 RPM Heavy Gear',
-        equipment: 'Bike (Outdoor or Indoor)',
-        formCue: 'Sync pedal stroke directly to the snare/kick of the 140+ BPM track.',
-      },
-      {
-        id: `d${clampedDay}-ex3`,
-        name: 'High-Cadence Flat Road Tempo Surge',
-        category: 'Legs & Plyo',
-        sets: 4,
-        repsOrHold: '4 min @ 100–110 RPM',
-        restSeconds: 90,
-        tempo: '105 RPM',
-        equipment: 'Bike',
-        formCue: 'Zero upper body bounce; smooth circular pedal pull-through.',
-      },
-      {
-        id: `d${clampedDay}-ex4`,
-        name: phase.coreMove[0],
-        category: 'Core & Compression',
-        sets: 3,
-        repsOrHold: `${holdSeconds + 10}s hold post-ride`,
-        restSeconds: 45,
-        tempo: 'Isometric',
-        equipment: 'Floor',
-        formCue: 'Lock core stability after dismounting the bike.',
-      },
-    ];
-  } else if (dayType.focusArea === 'Muscle-Up & Ring Transitions') {
-    exercises = [
-      {
-        id: `d${clampedDay}-ex1`,
-        name: phase.skillMove[1],
-        category: 'Skill & Statics',
-        sets: 5,
-        repsOrHold: `${Math.max(4, repCount - 4)} skill reps / transitions`,
-        restSeconds: 120,
-        tempo: 'Explosive Pull + Fast Wrist Turn',
-        equipment: 'High Bar / Gymnastic Rings',
-        formCue: 'Pull around the bar (C-path), snap chest over bar at peak height.',
-      },
-      {
-        id: `d${clampedDay}-ex2`,
-        name: phase.pullMove[0],
-        category: 'Upper Pull',
-        sets: 4,
-        repsOrHold: `${repCount} explosive reps`,
-        restSeconds: 90,
-        tempo: '1-0-X-0',
-        equipment: 'Pull-Up Bar',
-        formCue: 'Pull bar to lower chest/upper abs every rep.',
-      },
-      {
-        id: `d${clampedDay}-ex3`,
-        name: phase.pushMove[0],
-        category: 'Upper Push',
-        sets: 4,
-        repsOrHold: `${repCount + 2} straight-bar / ring dips`,
-        restSeconds: 90,
-        tempo: '2-1-1-1',
-        equipment: 'High Bar / Rings',
-        formCue: 'Lean torso slightly over bar on descent, full elbow lock at top.',
+        tempo: '2-0-1-0',
+        equipment: 'No Equipment (Floor)',
+        formCue: 'Keep torso upright and take a comfortable, balanced step.',
       },
       {
         id: `d${clampedDay}-ex4`,
         name: phase.coreMove[2],
-        category: 'Core & Compression',
-        sets: 4,
-        repsOrHold: `${repCount} strict reps`,
-        restSeconds: 60,
-        tempo: '3-1-1-0',
-        equipment: 'Bar / Floor',
-        formCue: 'Maintain full body tension from shoulders to toes.',
+        category: 'Core & Sculpt',
+        sets: Math.max(2, baseSets - 1),
+        repsOrHold: `${holdSeconds}s hold / side`,
+        restSeconds: 45,
+        tempo: 'Balanced Lock',
+        equipment: 'No Equipment (Floor / Mat)',
+        formCue: 'Move slowly and keep hips level without wobbling side to side.',
       },
     ];
-  } else if (dayType.focusArea === 'Spartan Full-Body Gauntlet') {
+  } else if (dayType.focusArea === 'Cardio Burn & Optional Bike Ride') {
     exercises = [
       {
         id: `d${clampedDay}-ex1`,
-        name: `${phase.pullMove[0]} (EMOM Superset)`,
-        category: 'Upper Pull',
-        sets: 5,
-        repsOrHold: `${repCount} strict reps`,
-        restSeconds: 45,
-        tempo: 'Continuous Clean Cadence',
-        equipment: 'Pull-Up Bar',
-        formCue: 'Full extension at bottom, chin clears bar cleanly.',
+        name: phase.cardioMove[0],
+        category: 'Warm-Up & Flow',
+        sets: Math.max(2, baseSets),
+        repsOrHold: `${holdSeconds + 15}s brisk pace`,
+        restSeconds: 30,
+        tempo: 'Music Beat Sync',
+        equipment: 'No Equipment (Standing / Floor)',
+        formCue: 'Land softly on the balls of your feet and swing arms naturally to match the beat.',
       },
       {
         id: `d${clampedDay}-ex2`,
-        name: `${phase.pushMove[1]} (EMOM Superset)`,
-        category: 'Upper Push',
-        sets: 5,
-        repsOrHold: `${repCount + 4} reps`,
+        name: phase.cardioMove[1],
+        category: 'Warm-Up & Flow',
+        sets: baseSets,
+        repsOrHold: `${holdSeconds + 10}s steady flow`,
         restSeconds: 45,
-        tempo: 'Continuous Clean Cadence',
-        equipment: 'Parallel Bars / Rings',
-        formCue: 'Keep chest proud and shoulders packed.',
+        tempo: 'Smooth Cardio',
+        equipment: 'No Equipment (Standing / Floor)',
+        formCue: 'Step wide cleanly or jump lightly—choose the option that keeps your breathing steady.',
       },
       {
         id: `d${clampedDay}-ex3`,
-        name: phase.legMove[0],
-        category: 'Legs & Plyo',
+        name: 'Brisk Walk / Jog or Optional Stationary Bike Intervals',
+        category: 'Warm-Up & Flow',
         sets: 4,
-        repsOrHold: `${repCount} alternating reps`,
+        repsOrHold: '2 min brisk pace / 1 min easy recovery',
         restSeconds: 60,
-        tempo: '2-1-1-0',
-        equipment: 'Bodyweight',
-        formCue: 'Controlled depth, explosive stand.',
+        tempo: 'Steady Cadence',
+        equipment: 'No Equipment (Walk/Jog) or Optional Bike',
+        formCue: 'Sync your stride or pedal stroke right to the drumbeat; relax your shoulders.',
       },
       {
         id: `d${clampedDay}-ex4`,
         name: phase.coreMove[1],
-        category: 'Core & Compression',
-        sets: 4,
-        repsOrHold: `${repCount + 4} reps`,
-        restSeconds: 60,
-        tempo: 'Strict',
-        equipment: 'Bar / Floor',
-        formCue: 'Finish the week strong with zero form breakdown.',
+        category: 'Core & Sculpt',
+        sets: Math.max(2, baseSets - 1),
+        repsOrHold: `${repCount + 4} slow reps`,
+        restSeconds: 45,
+        tempo: 'Calm Finish',
+        equipment: 'No Equipment (Floor / Mat)',
+        formCue: 'Cool heart rate down with controlled core breathing.',
+      },
+    ];
+  } else if (dayType.focusArea === 'Arms, Core & Optional Dumbbell Finishers') {
+    exercises = [
+      {
+        id: `d${clampedDay}-ex1`,
+        name: phase.toneMove[0],
+        category: 'Optional Dumbbells',
+        sets: baseSets,
+        repsOrHold: `${repCount + 2} smooth reps`,
+        restSeconds: 45,
+        tempo: '2-1-2-0',
+        equipment: 'Optional Light Dumbbells (or Bodyweight)',
+        formCue: 'Keep elbows tucked close to sides; avoid swinging torso for momentum.',
+      },
+      {
+        id: `d${clampedDay}-ex2`,
+        name: phase.toneMove[1],
+        category: 'Upper Push',
+        sets: baseSets,
+        repsOrHold: `${repCount} controlled reps`,
+        restSeconds: strengthRest,
+        tempo: '2-0-1-1',
+        equipment: 'No Equipment (Floor / Mat)',
+        formCue: 'Feel triceps and chest tone evenly; take knee option whenever form starts to slip.',
+      },
+      {
+        id: `d${clampedDay}-ex3`,
+        name: phase.toneMove[2],
+        category: 'Optional Dumbbells',
+        sets: Math.max(2, baseSets - 1),
+        repsOrHold: `${quarterIdx >= 2 ? `${holdSeconds}s hold / ` : ''}${repCount + 2} reps`,
+        restSeconds: 45,
+        tempo: 'Controlled Burn',
+        equipment:
+          quarterIdx <= 1 ? 'Optional Light Dumbbells (or Bodyweight)' : 'No Equipment (Wall / Floor)',
+        formCue: 'Build lean arm & leg definition through slow, steady muscle tension.',
+      },
+      {
+        id: `d${clampedDay}-ex4`,
+        name: phase.coreMove[0],
+        category: 'Core & Sculpt',
+        sets: Math.max(2, baseSets - 1),
+        repsOrHold: `${holdSeconds + 5}s hold`,
+        restSeconds: 45,
+        tempo: 'Steady Tension',
+        equipment: 'No Equipment (Floor / Mat)',
+        formCue: 'Brace tummy gently as if preparing for a light tap.',
+      },
+    ];
+  } else if (dayType.focusArea === 'Full-Body Toning Circuit') {
+    exercises = [
+      {
+        id: `d${clampedDay}-ex1`,
+        name: phase.legMove[0],
+        category: 'Legs & Glutes',
+        sets: baseSets,
+        repsOrHold: `${repCount + 4} circuit reps`,
+        restSeconds: 30,
+        tempo: 'Smooth Continuous Flow',
+        equipment: 'No Equipment (Floor)',
+        formCue: 'Keep chest lifted and weight centered across whole foot.',
+      },
+      {
+        id: `d${clampedDay}-ex2`,
+        name: phase.pushMove[0],
+        category: 'Upper Push',
+        sets: baseSets,
+        repsOrHold: `${repCount} circuit reps`,
+        restSeconds: 30,
+        tempo: 'Smooth Continuous Flow',
+        equipment: quarterIdx === 0 ? 'No Equipment (Wall or Floor)' : 'No Equipment (Floor / Mat)',
+        formCue: 'Keep hips aligned with shoulders on every rep.',
+      },
+      {
+        id: `d${clampedDay}-ex3`,
+        name: phase.backMove[1],
+        category: 'Back & Posture',
+        sets: baseSets,
+        repsOrHold: `${repCount + 2} reps`,
+        restSeconds: 30,
+        tempo: '1-1-1-0',
+        equipment:
+          quarterIdx === 1
+            ? 'Optional Light Dumbbells (or Bodyweight)'
+            : 'No Equipment (Floor / Mat)',
+        formCue: 'Pull shoulder blades cleanly back and down away from neck.',
+      },
+      {
+        id: `d${clampedDay}-ex4`,
+        name: phase.coreMove[2],
+        category: 'Core & Sculpt',
+        sets: Math.max(2, baseSets - 1),
+        repsOrHold: `${holdSeconds}s / ${repCount} reps`,
+        restSeconds: 45,
+        tempo: 'Clean Finisher',
+        equipment: 'No Equipment (Floor / Mat)',
+        formCue: 'Finish the week strong with calm breathing and good posture.',
       },
     ];
   } else {
     exercises = [
       {
         id: `d${clampedDay}-ex1`,
-        name: 'Passive & Active Spinal Bar Decompression Hang',
-        category: 'Skill & Statics',
-        sets: 3,
-        repsOrHold: '45s relaxed hang + 5 scapular shrugs',
-        restSeconds: 45,
-        tempo: 'Deep Breathing',
-        equipment: 'Pull-Up Bar',
-        formCue: 'Inhale 4s through nose, exhale 6s while letting lats and spine lengthen.',
+        name: 'Cat-Cow Spine & Shoulder Blade Mobility Flow',
+        category: 'Warm-Up & Flow',
+        sets: 2,
+        repsOrHold: '8 slow breath-led cycles',
+        restSeconds: 30,
+        tempo: '4s Inhale / 4s Exhale',
+        equipment: 'No Equipment (Floor / Mat)',
+        formCue: 'Round and arch spine slowly like a wave to release tension from neck to hips.',
       },
       {
         id: `d${clampedDay}-ex2`,
-        name: 'Planche & Handstand Wrist Conditioning Flow',
-        category: 'Skill & Statics',
-        sets: 3,
-        repsOrHold: '12 wrist push-ups + 30s dorsal stretch',
-        restSeconds: 30,
-        tempo: 'Slow & Deliberate',
-        equipment: 'Floor',
-        formCue: 'Keep elbows locked while lifting palms smoothly off the mat.',
+        name: 'Gentle Wrist, Chest & Shoulder Wall Stretch',
+        category: 'Warm-Up & Flow',
+        sets: 2,
+        repsOrHold: '30s each side',
+        restSeconds: 20,
+        tempo: 'Relaxed Stretch',
+        equipment: 'No Equipment (Floor / Wall)',
+        formCue: 'Keep shoulders dropped and smile through slow breathing—zero forcing.',
       },
       {
         id: `d${clampedDay}-ex3`,
-        name: '90/90 Hip Opening & Thoracic Bridge Flow',
-        category: 'Legs & Plyo',
-        sets: 3,
-        repsOrHold: '60s per side',
-        restSeconds: 30,
-        tempo: 'Fluid Mobility',
-        equipment: 'Floor',
-        formCue: 'Open thoracic spine toward the ceiling and reach long.',
+        name: '90/90 Hip & Gentle Glute Recovery Stretch',
+        category: 'Legs & Glutes',
+        sets: 2,
+        repsOrHold: '45s per side',
+        restSeconds: 20,
+        tempo: 'Deep Breathing',
+        equipment: 'No Equipment (Floor / Mat)',
+        formCue: 'Lean chest gently forward over front shin until you feel a comfortable hip release.',
       },
     ];
   }
@@ -560,26 +685,28 @@ export function getCalisthenicsDayPlan(dayNumber: number): CalisthenicsDayPlan {
     workoutTitle: `Day ${clampedDay}: ${dayType.focusArea}`,
     focusArea: dayType.focusArea,
     difficultyBadge: phase.difficulty,
-    estimatedMinutes: dayType.minutes,
-    targetBpm: dayType.targetBpm,
+    estimatedMinutes,
+    targetBpm,
     recommendedGenre: dayType.genre,
     exercises,
     bikeProtocol: {
       title:
-        dayType.focusArea === 'Bike Cadence & Endurance Ride'
-          ? `Day ${clampedDay} Primary Road / Indoor Cycling Interval Session`
-          : `Day ${clampedDay} Optional 20-Min Bike Conditioning Add-On`,
-      durationMinutes: dayType.focusArea === 'Bike Cadence & Endurance Ride' ? 45 : 20,
+        dayType.focusArea === 'Cardio Burn & Optional Bike Ride'
+          ? `Day ${clampedDay} Brisk Walk, Jog or Optional Bike Session`
+          : `Day ${clampedDay} Optional 15-Min Walk / Easy Spin Cool-Down`,
+      durationMinutes: dayType.focusArea === 'Cardio Burn & Optional Bike Ride' ? 25 + quarterIdx * 5 : 15,
       targetCadenceRpm:
-        dayType.focusArea === 'Active Recovery, Mobility & Deep Selah' ? '75–85 RPM Zone 2' : '92–108 RPM Tempo',
+        dayType.focusArea === 'Active Recovery, Stretch & Deep Selah'
+          ? 'Easy 70–80 RPM / Relaxed Walk'
+          : `${82 + quarterIdx * 4}–${96 + quarterIdx * 4} RPM Brisk Pace`,
       intensityZone:
-        dayType.focusArea === 'Active Recovery, Mobility & Deep Selah'
-          ? 'Zone 2 Recovery Spin'
-          : 'Zone 3/4 Threshold & Sprint Intervals',
+        dayType.focusArea === 'Active Recovery, Stretch & Deep Selah'
+          ? 'Zone 1–2 Easy Recovery'
+          : 'Zone 2–3 Fat-Burn & Stamina Rhythm',
       intervalsSummary:
-        dayType.focusArea === 'Bike Cadence & Endurance Ride'
-          ? '10m Warmup · 6x (90s Hill Sprint @ 150 BPM / 60s Spin) · 15m Cadence Cruise · 5m Cooldown'
-          : '5m Warmup Spin · 10m High-Cadence Rhythm Ride synced to music · 5m Cooldown',
+        dayType.focusArea === 'Cardio Burn & Optional Bike Ride'
+          ? '5m Easy Warm-Up · 4x (2m Brisk Walk/Jog/Spin to Beat · 1m Easy Recovery) · 5m Cool-Down'
+          : '3m Easy Warm-Up · 9m Steady Music-Synced Walk or Spin · 3m Relaxed Stretch',
     },
     devotional: {
       scriptureRef: scripture.ref,

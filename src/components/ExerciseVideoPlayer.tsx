@@ -8,48 +8,111 @@ interface ExerciseVideoPlayerProps {
 }
 
 type MotionArchetype =
-  | 'pullup'
-  | 'muscleup'
+  | 'wallpushup'
   | 'pushup'
-  | 'dip'
-  | 'handstand'
-  | 'lsit'
-  | 'frontlever'
-  | 'pistol'
+  | 'plank'
+  | 'bridge'
+  | 'dumbbell'
+  | 'squat'
+  | 'cardio'
   | 'core'
-  | 'bike'
-  | 'mobility';
+  | 'stretch'
+  | 'handstand'
+  | 'bike';
 
 function detectMotionArchetype(ex: CalisthenicsExercise): MotionArchetype {
   const name = ex.name.toLowerCase();
-  if (name.includes('muscle-up')) return 'muscleup';
-  if (name.includes('front lever')) return 'frontlever';
-  if (name.includes('handstand') || name.includes('hspu') || name.includes('pike')) return 'handstand';
-  if (name.includes('l-sit') || name.includes('v-sit') || name.includes('frog') || name.includes('planche hold')) return 'lsit';
-  if (name.includes('dip')) return 'dip';
-  if (name.includes('push-up') || name.includes('planche')) return 'pushup';
-  if (name.includes('pistol') || name.includes('squat') || name.includes('lunge') || name.includes('nordic') || name.includes('jump')) return 'pistol';
-  if (name.includes('bike') || name.includes('cadence') || name.includes('climb') || name.includes('spin')) return 'bike';
-  if (name.includes('hollow') || name.includes('dragon') || name.includes('toes-to-bar') || name.includes('knee') || name.includes('wiper') || name.includes('rollout')) return 'core';
-  if (name.includes('hang') || name.includes('mobility') || name.includes('wrist')) return 'mobility';
-  if (ex.category === 'Upper Pull') return 'pullup';
+  const equip = ex.equipment.toLowerCase();
+
+  if (name.includes('bike') || name.includes('spin') || name.includes('cycling') || name.includes('cadence')) {
+    return 'bike';
+  }
+  if (name.includes('handstand') || name.includes('pike')) {
+    return 'handstand';
+  }
+  if (name.includes('wall push-up') || name.includes('wall slide') || name.includes('wall shoulder') || name.includes('wall stretch')) {
+    return 'wallpushup';
+  }
+  if (name.includes('plank') || name.includes('bear crawl') || name.includes('mountain climber') || name.includes('inchworm')) {
+    return 'plank';
+  }
+  if (
+    name.includes('dumbbell') ||
+    name.includes('curl') ||
+    name.includes('lateral raise') ||
+    name.includes('y-t raise') ||
+    name.includes('thruster') ||
+    name.includes('arm circle') ||
+    name.includes('row') ||
+    ex.category === 'Optional Dumbbells' ||
+    equip.includes('dumbbell')
+  ) {
+    return 'dumbbell';
+  }
+  if (
+    name.includes('glute bridge') ||
+    name.includes('superman') ||
+    name.includes('w-squeeze') ||
+    name.includes('snow angel') ||
+    name.includes('bird-dog') ||
+    name.includes('swimmer') ||
+    name.includes('cat-cow')
+  ) {
+    return 'bridge';
+  }
+  if (
+    name.includes('squat') ||
+    name.includes('lunge') ||
+    name.includes('wall sit') ||
+    name.includes('skater')
+  ) {
+    return 'squat';
+  }
+  if (
+    name.includes('march') ||
+    name.includes('jumping jack') ||
+    name.includes('shadow boxing') ||
+    name.includes('burpee') ||
+    name.includes('walk / jog')
+  ) {
+    return 'cardio';
+  }
+  if (name.includes('push-up') || name.includes('dip')) {
+    return 'pushup';
+  }
+  if (
+    name.includes('dead bug') ||
+    name.includes('bicycle') ||
+    name.includes('hollow') ||
+    name.includes('v-up') ||
+    name.includes('v-sit') ||
+    name.includes('jackknife') ||
+    name.includes('v-tuck')
+  ) {
+    return 'core';
+  }
+  if (name.includes('stretch') || name.includes('mobility') || name.includes('recovery')) {
+    return 'stretch';
+  }
+
   if (ex.category === 'Upper Push') return 'pushup';
-  if (ex.category === 'Legs & Plyo') return 'pistol';
-  if (ex.category === 'Core & Compression') return 'core';
-  return 'pullup';
+  if (ex.category === 'Legs & Glutes') return 'squat';
+  if (ex.category === 'Back & Posture') return 'bridge';
+  if (ex.category === 'Warm-Up & Flow') return 'cardio';
+  return 'core';
 }
 
 export const ExerciseVideoPlayer: React.FC<ExerciseVideoPlayerProps> = ({ exercise }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const modalCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const lastPhaseRef = useRef('Concentric Drive');
+  const lastPhaseRef = useRef('Controlled Move');
   const [isVisible, setIsVisible] = useState(true);
   const [isPlaying, setIsPlaying] = useState(true);
   const [speed, setSpeed] = useState<1 | 0.5>(1);
   const [cameraAngle, setCameraAngle] = useState<'side' | 'front'>('side');
   const [isFullscreenModal, setIsFullscreenModal] = useState(false);
-  const [phaseLabel, setPhaseLabel] = useState('Concentric Drive');
+  const [phaseLabel, setPhaseLabel] = useState('Controlled Move');
 
   const archetype = detectMotionArchetype(exercise);
 
@@ -77,16 +140,16 @@ export const ExerciseVideoPlayer: React.FC<ExerciseVideoPlayerProps> = ({ exerci
       const elapsed = ((now - startTime) / 1000) * speed;
       const cycle = (elapsed % 3.6) / 3.6;
       let t = 0;
-      let currentPhase = 'Eccentric Control (3s)';
+      let currentPhase = 'Slow Lowering';
       if (cycle < 0.38) {
         t = Math.sin((cycle / 0.38) * (Math.PI / 2));
-        currentPhase = 'Concentric Drive';
+        currentPhase = 'Smooth Drive';
       } else if (cycle < 0.55) {
         t = 1;
-        currentPhase = 'Peak Isometric Lock';
+        currentPhase = 'Clean Tone Squeeze';
       } else {
         t = Math.cos(((cycle - 0.55) / 0.45) * (Math.PI / 2));
-        currentPhase = 'Strict Eccentric Lowering';
+        currentPhase = 'Controlled Return';
       }
 
       if (lastPhaseRef.current !== currentPhase) {
@@ -124,7 +187,7 @@ export const ExerciseVideoPlayer: React.FC<ExerciseVideoPlayerProps> = ({ exerci
         {/* Top Left Live Video Badge & Phase Telemetry */}
         <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
           <div className="px-2.5 py-1 rounded-lg bg-black/70 backdrop-blur-md border border-white/10 text-[10px] font-mono text-amber-400 flex items-center gap-1.5">
-            <span>HD WORKOUT VIDEO</span>
+            <span>FORM DEMO</span>
             <span aria-hidden="true">·</span>
             <span className="text-white">{phaseLabel}</span>
           </div>
@@ -197,7 +260,7 @@ export const ExerciseVideoPlayer: React.FC<ExerciseVideoPlayerProps> = ({ exerci
           <div className="relative z-10 px-5 sm:px-8 pt-5 pb-4 bg-gradient-to-b from-black/85 via-black/40 to-transparent flex items-center justify-between">
             <div>
               <div className="text-xs font-mono text-amber-400 font-bold uppercase">
-                {exercise.category}
+                {exercise.category} · {exercise.equipment}
               </div>
               <h3 className="text-xl sm:text-2xl font-extrabold text-white">{exercise.name}</h3>
             </div>
@@ -266,14 +329,12 @@ function drawAthleteCanvas(
   const W = canvas.width;
   const H = canvas.height;
 
-  // Studio dark background with subtle spotlight gradient
   const grad = ctx.createRadialGradient(W * 0.5, H * 0.45, 10, W * 0.5, H * 0.5, W * 0.65);
   grad.addColorStop(0, '#1A1E2E');
   grad.addColorStop(1, '#08090E');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, W, H);
 
-  // Subtle biomechanics grid lines
   ctx.strokeStyle = 'rgba(148, 163, 184, 0.07)';
   ctx.lineWidth = 1;
   const gridStep = 28;
@@ -290,7 +351,6 @@ function drawAthleteCanvas(
     ctx.stroke();
   }
 
-  // Floor line
   const floorY = H * 0.84;
   ctx.strokeStyle = 'rgba(245, 158, 11, 0.35)';
   ctx.lineWidth = 2;
@@ -301,7 +361,6 @@ function drawAthleteCanvas(
 
   const cx = W * 0.5;
 
-  // Helper to draw articulated limb & muscle glow
   const drawLimb = (x1: number, y1: number, x2: number, y2: number, thickness: number, isActiveMuscle = false) => {
     ctx.save();
     ctx.lineCap = 'round';
@@ -338,212 +397,260 @@ function drawAthleteCanvas(
     ctx.restore();
   };
 
-  if (archetype === 'pullup' || archetype === 'muscleup' || archetype === 'mobility') {
-    // Draw Pull-Up Rig Bar
-    const barY = H * 0.24;
+  const lowerName = exerciseName.toLowerCase();
+
+  if (archetype === 'wallpushup') {
+    // Wall Incline / Wall Slide / Wall Stretch
+    const wallX = cx + 62;
     ctx.strokeStyle = '#475569';
     ctx.lineWidth = 5;
     ctx.beginPath();
-    ctx.moveTo(cx - 85, floorY);
-    ctx.lineTo(cx - 85, barY - 12);
-    ctx.moveTo(cx + 85, floorY);
-    ctx.lineTo(cx + 85, barY - 12);
+    ctx.moveTo(wallX, H * 0.18);
+    ctx.lineTo(wallX, floorY);
     ctx.stroke();
 
-    ctx.strokeStyle = '#F59E0B';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(cx - 85, barY);
-    ctx.lineTo(cx + 85, barY);
-    ctx.stroke();
+    const press = (1 - t) * 20;
+    const footX = cx - 42;
+    const footY = floorY - 4;
+    const hipX = footX + 16 + press * 0.4;
+    const hipY = floorY - 62;
+    const shX = hipX + 18 + press * 0.8;
+    const shY = hipY - 48;
+    const handX = wallX - 4;
+    const handY = shY + 4;
+    const elbowX = (shX + handX) * 0.5 - press * 0.3;
+    const elbowY = shY + 14;
 
-    const maxPull = archetype === 'muscleup' ? 76 : archetype === 'mobility' ? 14 : 48;
-    const bodyLift = t * maxPull;
-    const shoulderY = barY + 46 - bodyLift;
-    const hipY = shoulderY + 52;
-    const kneeY = hipY + 38;
-    const ankleY = kneeY + 36;
+    drawLimb(footX, footY, hipX, hipY, 9);
+    drawLimb(hipX, hipY, shX, shY, 12, true);
+    drawLimb(shX, shY, elbowX, elbowY, 7, true);
+    drawLimb(elbowX, elbowY, handX, handY, 7, true);
+    drawHead(shX - 2, shY - 17);
+    drawJoint(handX, handY, 5, true);
+  } else if (archetype === 'pushup') {
+    const isKnee = lowerName.includes('knee');
+    const drop = (1 - t) * 28;
+    const handX = cx + (angle === 'side' ? 42 : 0);
+    const handY = floorY - 4;
+    const baseAnchorX = isKnee ? cx - 46 : cx - 72;
+    const baseAnchorY = floorY - 4;
+    const shX = cx + 38;
+    const shY = floorY - 52 + drop;
+    const hipX = (baseAnchorX + shX) * 0.5;
+    const hipY = (baseAnchorY + shY) * 0.5 - 2;
+    const elbowX = handX - 14;
+    const elbowY = (shY + handY) * 0.55;
 
-    if (angle === 'front') {
-      // Front view: Wide grip hands on bar
-      const leftHandX = cx - 32;
-      const rightHandX = cx + 32;
-      const leftElbowX = cx - 44 + t * 10;
-      const rightElbowX = cx + 44 - t * 10;
-      const elbowY = (barY + shoulderY) * 0.5 + 10 - t * 12;
-
-      drawLimb(leftHandX, barY, leftElbowX, elbowY, 6, true);
-      drawLimb(leftElbowX, elbowY, cx - 18, shoulderY, 7, true);
-      drawLimb(rightHandX, barY, rightElbowX, elbowY, 6, true);
-      drawLimb(rightElbowX, elbowY, cx + 18, shoulderY, 7, true);
-
-      // Torso V-taper
-      drawLimb(cx - 18, shoulderY, cx + 18, shoulderY, 9, true);
-      drawLimb(cx, shoulderY, cx, hipY, 14, true);
-      drawLimb(cx - 10, hipY, cx - 10, kneeY, 8);
-      drawLimb(cx + 10, hipY, cx + 10, kneeY, 8);
-      drawLimb(cx - 10, kneeY, cx - 10, ankleY, 6);
-      drawLimb(cx + 10, kneeY, cx + 10, ankleY, 6);
-      drawHead(cx, shoulderY - 18);
-    } else {
-      // Side profile view: C-curve pull-up / muscle-up path
-      const cCurveX = archetype === 'muscleup' ? Math.sin(t * Math.PI) * 16 : 0;
-      const shX = cx + cCurveX;
-      const elbowX = cx - 22 + t * 8;
-      const elbowY = barY + 26 - bodyLift * 0.45;
-
-      drawLimb(cx, barY, elbowX, elbowY, 6, true);
-      drawLimb(elbowX, elbowY, shX, shoulderY, 8, true);
-      drawLimb(shX, shoulderY, shX + 4, hipY, 12, true);
-      drawLimb(shX + 4, hipY, shX + 10, kneeY, 9);
-      drawLimb(shX + 10, kneeY, shX + 14, ankleY, 7);
-      drawHead(shX + 2, shoulderY - 17);
-      drawJoint(cx, barY, 5, true);
-      drawJoint(elbowX, elbowY, 4, true);
+    if (isKnee) {
+      drawLimb(baseAnchorX - 26, floorY - 22, baseAnchorX, baseAnchorY, 8);
     }
-  } else if (archetype === 'pushup' || archetype === 'lsit') {
-    // Parallettes on floor
-    const handX = cx + (angle === 'side' ? 36 : 0);
-    const handY = floorY - 8;
+    drawLimb(baseAnchorX, baseAnchorY, hipX, hipY, 9);
+    drawLimb(hipX, hipY, shX, shY, 12, true);
+    drawLimb(shX, shY, elbowX, elbowY, 8, true);
+    drawLimb(elbowX, elbowY, handX, handY, 7, true);
+    drawHead(shX + 16, shY - 6);
+    drawJoint(handX, handY, 5, true);
+  } else if (archetype === 'plank') {
+    const breath = Math.sin(elapsed * 2.5) * 2;
+    const tapOffset = lowerName.includes('tap') || lowerName.includes('climber') ? Math.sin(elapsed * 5) * 10 : 0;
+    const ankleX = cx - 70;
+    const ankleY = floorY - 4;
+    const hipX = cx - 12;
+    const hipY = floorY - 36 + breath;
+    const shX = cx + 44;
+    const shY = floorY - 38 + breath;
+    const elbowX = shX + 4;
+    const elbowY = floorY - 6;
 
-    if (archetype === 'lsit') {
-      // Strict L-Sit on parallettes
-      const shX = cx - 10;
-      const shY = handY - 52 - t * 6;
-      const hipX = shX;
-      const hipY = handY - 10 - t * 8;
-      const footX = hipX + 68;
-      const footY = hipY - t * 12; // V-sit lift on t
+    drawLimb(ankleX, ankleY + (lowerName.includes('climber') ? Math.max(0, tapOffset) * -1.4 : 0), hipX, hipY, 9, true);
+    drawLimb(hipX, hipY, shX, shY, 12, true);
+    drawLimb(shX, shY, elbowX, elbowY, 7, true);
+    drawLimb(elbowX, elbowY, elbowX + 18, floorY - 4, 6);
+    drawHead(shX + 18, shY - 4);
+  } else if (archetype === 'bridge') {
+    if (lowerName.includes('superman') || lowerName.includes('w-squeeze') || lowerName.includes('snow angel') || lowerName.includes('swimmer')) {
+      // Prone upper back extension / Superman on floor mat
+      const lift = t * 18;
+      const hipX = cx - 12;
+      const hipY = floorY - 6;
+      const shX = cx + 38;
+      const shY = floorY - 8 - lift;
+      const footX = cx - 72;
+      const footY = floorY - 6 - lift * 0.7;
+
+      drawLimb(footX, footY, hipX, hipY, 9, true);
+      drawLimb(hipX, hipY, shX, shY, 12, true);
+      drawLimb(shX, shY, shX + 34, shY - 10 - lift * 0.4, 7, true);
+      drawHead(shX + 14, shY - 10);
+    } else {
+      // Floor Glute Bridge / Cat-Cow / Bird-Dog
+      const hipLift = t * 34;
+      const shX = cx - 44;
+      const shY = floorY - 8;
+      const hipX = cx + 4;
+      const hipY = floorY - 12 - hipLift;
+      const kneeX = cx + 42;
+      const kneeY = floorY - 42;
+      const footX = cx + 56;
+      const footY = floorY - 4;
 
       drawLimb(shX, shY, hipX, hipY, 12, true);
-      drawLimb(shX, shY, handX - 10, handY, 7, true);
-      drawLimb(hipX, hipY, footX, footY, 9, true);
-      drawHead(shX + 2, shY - 16);
+      drawLimb(hipX, hipY, kneeX, kneeY, 10, true);
+      drawLimb(kneeX, kneeY, footX, footY, 8);
+      drawLimb(shX + 6, shY, hipX + 18, floorY - 4, 6);
+      drawHead(shX - 15, shY - 4);
       drawJoint(hipX, hipY, 5, true);
-    } else {
-      // Push-Up / Pseudo-Planche Push-Up
-      const drop = (1 - t) * 32;
-      const lean = t * 12;
-      const footX = cx - 72;
-      const footY = floorY - 4;
-      const shX = cx + 38 + lean;
-      const shY = floorY - 56 + drop;
-      const hipX = (footX + shX) * 0.5;
-      const hipY = (footY + shY) * 0.5 - 2;
-      const elbowX = handX - 14;
-      const elbowY = (shY + handY) * 0.55;
-
-      drawLimb(footX, footY, hipX, hipY, 9);
-      drawLimb(hipX, hipY, shX, shY, 12, true);
-      drawLimb(shX, shY, elbowX, elbowY, 8, true);
-      drawLimb(elbowX, elbowY, handX, handY, 7, true);
-      drawHead(shX + 16, shY - 6);
-      drawJoint(handX, handY, 5, true);
-      drawJoint(elbowX, elbowY, 4, true);
     }
-  } else if (archetype === 'dip') {
-    // Parallel Bars / Rings Dip
-    const barY = H * 0.48;
-    ctx.strokeStyle = '#64748B';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(cx - 50, barY);
-    ctx.lineTo(cx + 50, barY);
-    ctx.moveTo(cx - 35, barY);
-    ctx.lineTo(cx - 35, floorY);
-    ctx.moveTo(cx + 35, barY);
-    ctx.lineTo(cx + 35, floorY);
-    ctx.stroke();
-
-    const dipDrop = (1 - t) * 36;
-    const shX = cx + 6;
-    const shY = barY - 40 + dipDrop;
-    const elbowX = cx - 18;
-    const elbowY = barY - 18 + dipDrop * 0.6;
+  } else if (archetype === 'dumbbell') {
+    const isRow = lowerName.includes('row') || lowerName.includes('y-t');
+    const isLateral = lowerName.includes('lateral');
+    const ankleX = cx - 8;
+    const ankleY = floorY - 4;
     const hipX = cx - 4;
-    const hipY = shY + 50;
-    const kneeY = hipY + 36;
+    const hipY = floorY - 64;
 
-    drawLimb(cx, barY, elbowX, elbowY, 7, true);
-    drawLimb(elbowX, elbowY, shX, shY, 8, true);
-    drawLimb(shX, shY, hipX, hipY, 12, true);
-    drawLimb(hipX, hipY, hipX, kneeY, 9);
-    drawLimb(hipX, kneeY, hipX - 18, kneeY + 18, 7);
-    drawHead(shX + 4, shY - 16);
-  } else if (archetype === 'frontlever') {
-    // Bar + Horizontal Front Lever Raise & Hold
-    const barY = H * 0.25;
-    ctx.strokeStyle = '#F59E0B';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(cx - 70, barY);
-    ctx.lineTo(cx + 70, barY);
-    ctx.stroke();
+    if (isRow) {
+      // Hinged bent-over posture (dumbbell or bodyweight row squeeze)
+      const shX = hipX + 38;
+      const shY = hipY - 26;
+      const handX = shX + 8;
+      const handY = shY + 40 - t * 24;
+      const elbowX = shX - 10;
+      const elbowY = shY + 14 - t * 18;
 
-    const shX = cx - 18;
-    const shY = barY + 44;
-    const angleRad = (1 - t) * 0.65; // Rotates up into strict horizontal lock
-    const hipX = shX + Math.cos(angleRad) * 48;
-    const hipY = shY + Math.sin(angleRad) * 48;
-    const footX = hipX + Math.cos(angleRad) * 68;
-    const footY = hipY + Math.sin(angleRad) * 68;
+      drawLimb(ankleX, ankleY, ankleX + 6, floorY - 34, 9);
+      drawLimb(ankleX + 6, floorY - 34, hipX, hipY, 10);
+      drawLimb(hipX, hipY, shX, shY, 12, true);
+      drawLimb(shX, shY, elbowX, elbowY, 7, true);
+      drawLimb(elbowX, elbowY, handX, handY, 7, true);
+      drawHead(shX + 14, shY - 10);
+      // Small optional dumbbell glyph
+      ctx.fillStyle = '#34D399';
+      ctx.fillRect(handX - 9, handY - 3, 18, 6);
+    } else if (isLateral || angle === 'front') {
+      // Standing Front Alignment Curl-to-Press / Lateral Raise
+      const shY = hipY - 52;
+      const kneeY = floorY - 34;
+      drawLimb(cx - 12, ankleY, cx - 12, kneeY, 8);
+      drawLimb(cx - 12, kneeY, cx - 10, hipY, 9);
+      drawLimb(cx + 12, ankleY, cx + 12, kneeY, 8);
+      drawLimb(cx + 12, kneeY, cx + 10, hipY, 9);
+      drawLimb(cx, hipY, cx, shY, 14, true);
 
-    drawLimb(cx, barY, shX, shY, 7, true);
+      const armSpread = isLateral ? 40 * t + 10 : 22;
+      const handY = isLateral ? shY + 26 * (1 - t) : shY + 34 - t * 62;
+      drawLimb(cx - 14, shY, cx - armSpread, handY, 7, true);
+      drawLimb(cx + 14, shY, cx + armSpread, handY, 7, true);
+      ctx.fillStyle = '#34D399';
+      ctx.fillRect(cx - armSpread - 7, handY - 3, 14, 6);
+      ctx.fillRect(cx + armSpread - 7, handY - 3, 14, 6);
+      drawHead(cx, shY - 18);
+    } else {
+      // Side standing curl-to-overhead-press
+      const shX = hipX + 2;
+      const shY = hipY - 52;
+      drawLimb(ankleX, ankleY, ankleX + 2, floorY - 34, 9);
+      drawLimb(ankleX + 2, floorY - 34, hipX, hipY, 10);
+      drawLimb(hipX, hipY, shX, shY, 12);
+
+      const elbowX = shX + 14;
+      const elbowY = shY + 22 - t * 28;
+      const handX = shX + 20 - t * 8;
+      const handY = shY + 38 - t * 68;
+      drawLimb(shX, shY, elbowX, elbowY, 7, true);
+      drawLimb(elbowX, elbowY, handX, handY, 7, true);
+      ctx.fillStyle = '#34D399';
+      ctx.fillRect(handX - 8, handY - 3, 16, 6);
+      drawHead(shX + 2, shY - 17);
+    }
+  } else if (archetype === 'squat') {
+    const isLunge = lowerName.includes('lunge') || lowerName.includes('split');
+    const depth = (1 - t) * 38;
+    if (isLunge) {
+      const hipX = cx;
+      const hipY = floorY - 72 + depth * 0.7;
+      const frontFootX = cx + 44;
+      const backFootX = cx - 44;
+      const frontKneeX = cx + 38;
+      const frontKneeY = floorY - 38 + depth * 0.25;
+      const backKneeX = cx - 22;
+      const backKneeY = floorY - 30 + depth * 0.55;
+      const shX = hipX + 4;
+      const shY = hipY - 50;
+
+      drawLimb(frontFootX, floorY - 4, frontKneeX, frontKneeY, 9, true);
+      drawLimb(frontKneeX, frontKneeY, hipX, hipY, 11, true);
+      drawLimb(backFootX, floorY - 4, backKneeX, backKneeY, 8);
+      drawLimb(backKneeX, backKneeY, hipX, hipY, 9);
+      drawLimb(hipX, hipY, shX, shY, 12);
+      drawHead(shX + 2, shY - 16);
+    } else {
+      const ankleX = cx;
+      const ankleY = floorY - 4;
+      const kneeX = cx + 16 + (1 - t) * 14;
+      const kneeY = ankleY - 36 + depth * 0.35;
+      const hipX = cx - 18 - (1 - t) * 14;
+      const hipY = kneeY - 36 + depth * 0.65;
+      const shX = hipX + 16;
+      const shY = hipY - 48;
+
+      drawLimb(ankleX, ankleY, kneeX, kneeY, 9, true);
+      drawLimb(kneeX, kneeY, hipX, hipY, 11, true);
+      drawLimb(hipX, hipY, shX, shY, 12);
+      drawLimb(shX, shY, shX + 36, shY + 6, 6);
+      drawHead(shX + 4, shY - 16);
+    }
+  } else if (archetype === 'cardio') {
+    // Rhythmic Marching / Jumping Jacks / Walk Cardio
+    const step = Math.sin(elapsed * 7);
+    const bounce = Math.abs(step) * 10;
+    const hipY = floorY - 64 - bounce;
+    const shY = hipY - 50;
+
+    drawLimb(cx, hipY, cx, shY, 13, true);
+    drawLimb(cx - 10, hipY, cx - 18 - Math.max(0, step) * 12, floorY - 4 - Math.max(0, -step) * 24, 9, true);
+    drawLimb(cx + 10, hipY, cx + 18 + Math.max(0, -step) * 12, floorY - 4 - Math.max(0, step) * 24, 9, true);
+    drawLimb(cx - 12, shY, cx - 32 - Math.abs(step) * 10, shY - step * 28, 7, true);
+    drawLimb(cx + 12, shY, cx + 32 + Math.abs(step) * 10, shY + step * 28, 7, true);
+    drawHead(cx, shY - 18);
+  } else if (archetype === 'core') {
+    const shX = cx - 48;
+    const shY = floorY - 10;
+    const liftAngle = 0.15 + t * 0.72;
+    const hipX = shX + Math.cos(liftAngle) * 44;
+    const hipY = shY - Math.sin(liftAngle) * 44;
+    const footX = hipX + Math.cos(liftAngle) * 62;
+    const footY = hipY - Math.sin(liftAngle) * 62;
+
     drawLimb(shX, shY, hipX, hipY, 12, true);
     drawLimb(hipX, hipY, footX, footY, 9, true);
-    drawHead(shX - 14, shY);
-    drawJoint(cx, barY, 5, true);
+    drawHead(shX - 15, shY - 4);
+  } else if (archetype === 'stretch') {
+    // Gentle floor stretch / seated hip release
+    const lean = t * 18;
+    const hipX = cx - 20;
+    const hipY = floorY - 8;
+    const shX = hipX + 14 + lean;
+    const shY = hipY - 44 + lean * 0.4;
+    drawLimb(hipX, hipY, cx + 46, floorY - 6, 9, true);
+    drawLimb(hipX, hipY, shX, shY, 12, true);
+    drawLimb(shX, shY, shX + 26, shY + 12, 6, true);
+    drawHead(shX + 4, shY - 16);
   } else if (archetype === 'handstand') {
-    // Handstand Push-Up
     const handY = floorY - 4;
-    const pressLift = t * 32;
+    const pressLift = t * 28;
     const shY = handY - 26 - pressLift;
     const elbowX = cx - 18 * (1 - t);
     const elbowY = (handY + shY) * 0.5;
     const hipY = shY - 52;
-    const footY = hipY - 64;
+    const footY = hipY - 62;
 
     drawLimb(cx, handY, elbowX, elbowY, 7, true);
     drawLimb(elbowX, elbowY, cx, shY, 8, true);
     drawLimb(cx, shY, cx, hipY, 12, true);
     drawLimb(cx, hipY, cx, footY, 9);
     drawHead(cx + 2, shY + 14);
-  } else if (archetype === 'pistol') {
-    // Strict Pistol Squat
-    const squatDepth = (1 - t) * 52;
-    const ankleX = cx - 10;
-    const ankleY = floorY - 4;
-    const kneeX = ankleX + 18 + (1 - t) * 14;
-    const kneeY = ankleY - 38 + squatDepth * 0.35;
-    const hipX = ankleX - 16 - (1 - t) * 12;
-    const hipY = kneeY - 36 + squatDepth * 0.65;
-    const shX = hipX + 14;
-    const shY = hipY - 48;
-    // Extended front leg
-    const extFootX = hipX + 68;
-    const extFootY = hipY + 8;
-
-    drawLimb(ankleX, ankleY, kneeX, kneeY, 9, true);
-    drawLimb(kneeX, kneeY, hipX, hipY, 11, true);
-    drawLimb(hipX, hipY, extFootX, extFootY, 8, true);
-    drawLimb(hipX, hipY, shX, shY, 12);
-    drawLimb(shX, shY, shX + 46, shY + 4, 6);
-    drawHead(shX + 4, shY - 16);
-  } else if (archetype === 'core') {
-    // Dragon Flag / Hollow Body Leg Raise
-    const shX = cx - 54;
-    const shY = floorY - 10;
-    const liftAngle = 0.15 + t * 0.85;
-    const hipX = shX + Math.cos(liftAngle) * 48;
-    const hipY = shY - Math.sin(liftAngle) * 48;
-    const footX = hipX + Math.cos(liftAngle) * 66;
-    const footY = hipY - Math.sin(liftAngle) * 66;
-
-    drawLimb(shX, shY, hipX, hipY, 12, true);
-    drawLimb(hipX, hipY, footX, footY, 9, true);
-    drawHead(shX - 15, shY - 4);
   } else if (archetype === 'bike') {
-    // Road / Indoor Cycling Sprint Cadence
     const wheelR = 32;
     const rearX = cx - 48;
     const frontX = cx + 48;
@@ -558,7 +665,6 @@ function drawAthleteCanvas(
     ctx.arc(frontX, wheelY, wheelR, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Frame
     const crankX = cx - 6;
     const crankY = wheelY;
     const seatX = cx - 26;
@@ -570,8 +676,7 @@ function drawAthleteCanvas(
     drawLimb(crankX, crankY, barX, barY, 3);
     drawLimb(seatX, seatY, barX, barY, 3);
 
-    // Pedaling legs at high RPM
-    const pedalAngle = elapsed * 9;
+    const pedalAngle = elapsed * 8;
     const footX = crankX + Math.cos(pedalAngle) * 16;
     const footY = crankY + Math.sin(pedalAngle) * 16;
     const hipX = seatX + 6;
@@ -588,9 +693,8 @@ function drawAthleteCanvas(
     drawHead(shX + 12, shY - 12);
   }
 
-  // Exercise watermark title inside canvas bottom right
   ctx.fillStyle = 'rgba(255,255,255,0.45)';
   ctx.font = '600 10px "JetBrains Mono", monospace';
   ctx.textAlign = 'right';
-  ctx.fillText(exerciseName.slice(0, 38), W - 12, floorY + 22);
+  ctx.fillText(exerciseName.slice(0, 42), W - 12, floorY + 22);
 }

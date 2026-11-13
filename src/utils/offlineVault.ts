@@ -194,13 +194,13 @@ export async function saveDiscoveredTracksToVault(discoveredTracks: Track[]): Pr
     }
   }
 
-  // Persist ALL discovered releases permanently in IndexedDB (supports thousands of songs)
+  // Persist ALL discovered releases permanently in IndexedDB (no artificial 300 or 3,000 limit)
   try {
     const db = await openVaultDB();
     const tx = db.transaction(STORE_DISCOVERED_TRACKS, 'readwrite');
     const store = tx.objectStore(STORE_DISCOVERED_TRACKS);
     const now = Date.now();
-    discoveredTracks.slice(-3000).forEach((trk, idx) => {
+    discoveredTracks.forEach((trk, idx) => {
       if (!trk?.id) return;
       store.put({
         ...trk,
@@ -289,6 +289,25 @@ export async function getTrackAudioBlob(trackId: string): Promise<Blob | null> {
   }
 }
 
+export async function invalidateCachedAudioBlob(trackId: string): Promise<void> {
+  const existingUrl = memoryBlobUrlMap.get(trackId);
+  if (existingUrl) {
+    try {
+      URL.revokeObjectURL(existingUrl);
+    } catch {
+      // ignore
+    }
+    memoryBlobUrlMap.delete(trackId);
+  }
+  try {
+    const db = await openVaultDB();
+    const tx = db.transaction(STORE_AUDIO_BLOBS, 'readwrite');
+    tx.objectStore(STORE_AUDIO_BLOBS).delete(trackId);
+  } catch {
+    // ignore
+  }
+}
+
 export async function isTrackAudioCached(trackId: string): Promise<boolean> {
   if (memoryBlobUrlMap.has(trackId)) return true;
   try {
@@ -365,54 +384,146 @@ export async function resolveDirectItunesAudioUrl(track: Track): Promise<string 
   return null;
 }
 
+const inFlightBlobFetches = new Map<
+  string,
+  Promise<{ blob: Blob; blobUrl: string } | null>
+>();
+
+/**
+ * Downloads the full-length audio stream cleanly (assembling multi-part 206 chunks if needed),
+ * caches the complete Blob in memory & IndexedDB, and returns the local Blob URL so playback never stops mid-song.
+ */
+export async function fetchCompleteAudioBlobFromStream(
+  track: Track
+): Promise<{ blob: Blob; blobUrl: string } | null> {
+  const existingSync = memoryBlobUrlMap.get(track.id);
+  if (existingSync) {
+    const existingBlob = await getTrackAudioBlob(track.id);
+    if (existingBlob && existingBlob.size >= MIN_FULL_SONG_BYTES) {
+      return { blob: existingBlob, blobUrl: existingSync };
+    }
+  }
+
+  const inflight = inFlightBlobFetches.get(track.id);
+  if (inflight) {
+    return inflight;
+  }
+
+  const task = (async (): Promise<{ blob: Blob; blobUrl: string } | null> => {
+    try {
+      const url = `/api/music/full-song?title=${encodeURIComponent(
+        track.title
+      )}&artist=${encodeURIComponent(track.artist)}&id=${encodeURIComponent(track.id)}`;
+      const response = await fetch(url);
+      if (!response.ok) return null;
+
+      const contentType = response.headers.get('content-type') || 'audio/mpeg';
+      if (!contentType.includes('audio') && !contentType.includes('octet-stream')) {
+        return null;
+      }
+
+      let finalBlob: Blob | null = null;
+      if (response.status === 206) {
+        const contentRange = response.headers.get('content-range') || '';
+        const expectedEtag = response.headers.get('etag') || '';
+        const match = contentRange.match(/bytes\s+(\d+)-(\d+)\/(\d+)/i);
+        const firstBuf = await response.arrayBuffer();
+        if (match && parseInt(match[1], 10) === 0 && firstBuf.byteLength > 0) {
+          const totalSize = parseInt(match[3], 10);
+          let nextOffset = parseInt(match[2], 10) + 1;
+          const chunks: ArrayBuffer[] = [firstBuf];
+          let receivedBytes = firstBuf.byteLength;
+          let failedChunk = false;
+
+          while (nextOffset < totalSize && chunks.length < 24) {
+            let chunkDone = false;
+            for (let attempt = 0; attempt < 2 && !chunkDone; attempt++) {
+              try {
+                const partRes = await fetch(url, {
+                  headers: { Range: `bytes=${nextOffset}-` },
+                });
+                if (!partRes.ok) continue;
+
+                const partEtag = partRes.headers.get('etag') || '';
+                if (expectedEtag && partEtag && expectedEtag !== partEtag) {
+                  continue;
+                }
+
+                const partBuf = await partRes.arrayBuffer();
+                if (partBuf.byteLength === 0) continue;
+
+                if (partRes.status === 206) {
+                  const pRange = partRes.headers.get('content-range') || '';
+                  const pMatch = pRange.match(/bytes\s+(\d+)-(\d+)\/(\d+)/i);
+                  if (pMatch) {
+                    const pStart = parseInt(pMatch[1], 10);
+                    const pEnd = parseInt(pMatch[2], 10);
+                    const pTotal = parseInt(pMatch[3], 10);
+                    if (pStart === nextOffset && pTotal === totalSize) {
+                      chunks.push(partBuf);
+                      receivedBytes += partBuf.byteLength;
+                      nextOffset = pEnd + 1;
+                      chunkDone = true;
+                    }
+                  }
+                } else if (partRes.status === 200 && partBuf.byteLength === totalSize) {
+                  // Server returned full body directly
+                  chunks.length = 0;
+                  chunks.push(partBuf);
+                  receivedBytes = partBuf.byteLength;
+                  nextOffset = totalSize;
+                  chunkDone = true;
+                }
+              } catch {
+                // retry chunk once
+              }
+            }
+
+            if (!chunkDone) {
+              failedChunk = true;
+              break;
+            }
+          }
+
+          if (!failedChunk && receivedBytes >= totalSize) {
+            finalBlob = new Blob(chunks, { type: contentType });
+          }
+        } else if (!match && firstBuf.byteLength >= MIN_FULL_SONG_BYTES) {
+          finalBlob = new Blob([firstBuf], { type: contentType });
+        }
+      } else {
+        const blob = await response.blob();
+        if (blob.size >= MIN_FULL_SONG_BYTES) {
+          finalBlob = blob;
+        }
+      }
+
+      if (finalBlob && finalBlob.size >= MIN_FULL_SONG_BYTES) {
+        const blobUrl = URL.createObjectURL(finalBlob);
+        memoryBlobUrlMap.set(track.id, blobUrl);
+        await saveTrackAudioBlob(track.id, finalBlob).catch(() => {});
+        return { blob: finalBlob, blobUrl };
+      }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      inFlightBlobFetches.delete(track.id);
+    }
+  })();
+
+  inFlightBlobFetches.set(track.id, task);
+  return task;
+}
+
 /**
  * Caches full-length audio blob and metadata into IndexedDB so it plays 100% offline.
  */
 export async function fetchAndCacheTrackOffline(track: Track): Promise<boolean> {
   try {
-    // 1. Save metadata
     await saveTrackToIndexedDB(track);
-
-    // 2. Fetch full-length song stream (never cache 30-second clips into the full-song vault)
-    const url = `/api/music/full-song?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}&id=${encodeURIComponent(track.id)}`;
-    const response = await fetch(url);
-    if (response.ok) {
-      const contentType = response.headers.get('content-type') || 'audio/mpeg';
-      if (contentType.includes('audio') || contentType.includes('octet-stream')) {
-        if (response.status === 206) {
-          const contentRange = response.headers.get('content-range') || '';
-          const match = contentRange.match(/bytes\s+(\d+)-(\d+)\/(\d+)/i);
-          const firstBuf = await response.arrayBuffer();
-          if (match) {
-            const totalSize = parseInt(match[3], 10);
-            let nextOffset = parseInt(match[2], 10) + 1;
-            const chunks: ArrayBuffer[] = [firstBuf];
-            while (nextOffset < totalSize && chunks.length < 16) {
-              const partRes = await fetch(url, {
-                headers: { Range: `bytes=${nextOffset}-` },
-              });
-              if (!partRes.ok) break;
-              const partBuf = await partRes.arrayBuffer();
-              if (partBuf.byteLength === 0) break;
-              chunks.push(partBuf);
-              nextOffset += partBuf.byteLength;
-            }
-            const fullBlob = new Blob(chunks, { type: contentType });
-            if (fullBlob.size >= MIN_FULL_SONG_BYTES) {
-              await saveTrackAudioBlob(track.id, fullBlob);
-              return true;
-            }
-          }
-        } else {
-          const blob = await response.blob();
-          if (blob && blob.size >= MIN_FULL_SONG_BYTES) {
-            await saveTrackAudioBlob(track.id, blob);
-            return true;
-          }
-        }
-      }
-    }
-    return false;
+    const res = await fetchCompleteAudioBlobFromStream(track);
+    return Boolean(res);
   } catch {
     return false;
   }

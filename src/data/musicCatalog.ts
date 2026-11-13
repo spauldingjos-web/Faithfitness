@@ -801,6 +801,25 @@ function mapServerDiscoveredToTrack(
   };
 }
 
+const FOREVER_CHRISTIAN_GENRE_QUERIES: {
+  query: string;
+  genre: Exclude<ChristianGenre, 'all'>;
+  genreLabel: string;
+  bpmEstimate: number;
+  scripture: string;
+}[] = [
+  { query: 'Christian Praise Worship', genre: 'worship', genreLabel: 'Modern Worship', bpmEstimate: 112, scripture: 'Psalm 95:1' },
+  { query: 'Christian Hip Hop CHH', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpmEstimate: 142, scripture: 'Romans 1:16' },
+  { query: 'Christian Hard Rock', genre: 'rock', genreLabel: 'Christian Rock', bpmEstimate: 152, scripture: 'Joshua 1:9' },
+  { query: 'Christian Metalcore', genre: 'metal-hardcore', genreLabel: 'Christian Metalcore', bpmEstimate: 168, scripture: 'Hebrews 12:29' },
+  { query: 'Christian Country Gospel', genre: 'country-southern', genreLabel: 'Christian Country', bpmEstimate: 118, scripture: 'Psalm 100:2' },
+  { query: 'Gospel Soul Worship Choir', genre: 'rnb', genreLabel: 'Gospel R&B & Soul', bpmEstimate: 98, scripture: 'Psalm 150:1' },
+  { query: 'Christian Pop Punk Ska', genre: 'punk-ska', genreLabel: 'Christian Pop-Punk', bpmEstimate: 160, scripture: 'Psalm 32:7' },
+  { query: 'Afro Gospel Christian Reggae', genre: 'reggae-afro', genreLabel: 'Afro-Gospel & Reggae', bpmEstimate: 114, scripture: 'Psalm 47:1' },
+  { query: 'Christian Electronic EDM Dance', genre: 'workout-edm', genreLabel: 'Christian EDM', bpmEstimate: 152, scripture: 'Hebrews 12:1' },
+  { query: 'Contemporary Christian CCM', genre: 'ai-originals', genreLabel: 'Contemporary Christian', bpmEstimate: 122, scripture: 'Psalm 103:1' },
+];
+
 export async function fetchLiveChristianMusicBatch(
   seedIndex: number,
   existingKeys?: Set<string>
@@ -810,13 +829,14 @@ export async function fetchLiveChristianMusicBatch(
 
   // Tier 1 (Primary for web + downloaded PWAs): Pre-verified perpetual Christian server pool
   try {
+    const excludeSlice = Array.from(activeKeySet).slice(-1800);
     const discoverRes = await fetch('/api/music/discover-next', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        limit: 4,
+        limit: 5,
         cursor: seedIndex,
-        exclude: Array.from(activeKeySet),
+        exclude: excludeSlice,
       }),
     });
     if (discoverRes.ok) {
@@ -851,21 +871,44 @@ export async function fetchLiveChristianMusicBatch(
     return collectedTracks;
   }
 
-  // Tier 2: Client live artist seed discovery + strict SoundCloud/LRCLIB server verification
-  const totalSeeds = CHRISTIAN_ARTIST_SEEDS.length;
-  const baseSeed = CHRISTIAN_ARTIST_SEEDS[seedIndex % totalSeeds];
-  const useExtendedRoster = seedIndex >= totalSeeds && seedIndex % 2 === 1;
-  const extendedArtist =
-    VERIFIED_CHRISTIAN_ARTISTS[seedIndex % VERIFIED_CHRISTIAN_ARTISTS.length];
-  const effectiveQuery = useExtendedRoster ? extendedArtist : baseSeed.query;
-  const effectiveGenre = useExtendedRoster
-    ? inferGenreFromText(extendedArtist)
-    : baseSeed.genre;
+  // Tier 2: Full-roster Christian artist + Christian genre discovery (never skips artists or caps around ~300)
+  const useGenreSearch = seedIndex >= CHRISTIAN_ARTIST_SEEDS.length && seedIndex % 3 === 2;
+  const extendedPoolIdx = seedIndex % VERIFIED_CHRISTIAN_ARTISTS.length;
+  const genrePoolIdx = seedIndex % FOREVER_CHRISTIAN_GENRE_QUERIES.length;
+  const baseSeed = CHRISTIAN_ARTIST_SEEDS[seedIndex % CHRISTIAN_ARTIST_SEEDS.length];
 
-  const cycle = Math.floor(seedIndex / totalSeeds);
-  const modifier = FOREVER_SEARCH_MODIFIERS[cycle % FOREVER_SEARCH_MODIFIERS.length];
+  let effectiveQuery = baseSeed.query;
+  let effectiveGenre = baseSeed.genre;
+  let effectiveGenreLabel = baseSeed.genreLabel;
+  let effectivePlatform = baseSeed.platform;
+  let effectiveBpm = baseSeed.bpmEstimate;
+  let effectiveScripture = baseSeed.scripture;
+  let itunesOffset = 0;
+
+  if (useGenreSearch) {
+    const gSeed = FOREVER_CHRISTIAN_GENRE_QUERIES[genrePoolIdx];
+    const genreCycle = Math.floor(seedIndex / FOREVER_CHRISTIAN_GENRE_QUERIES.length);
+    effectiveQuery = gSeed.query;
+    effectiveGenre = gSeed.genre;
+    effectiveGenreLabel = gSeed.genreLabel;
+    effectiveBpm = gSeed.bpmEstimate;
+    effectiveScripture = gSeed.scripture;
+    itunesOffset = (genreCycle % 8) * 25;
+  } else if (seedIndex >= CHRISTIAN_ARTIST_SEEDS.length) {
+    const artistFromRoster = VERIFIED_CHRISTIAN_ARTISTS[extendedPoolIdx];
+    const artistPass = Math.floor(seedIndex / VERIFIED_CHRISTIAN_ARTISTS.length);
+    effectiveQuery = artistFromRoster;
+    effectiveGenre = inferGenreFromText(artistFromRoster);
+    effectiveGenreLabel = `${effectiveGenre.toUpperCase()} · Christian`;
+    itunesOffset = (artistPass % 7) * 25;
+  } else {
+    const basePass = Math.floor(seedIndex / CHRISTIAN_ARTIST_SEEDS.length);
+    itunesOffset = (basePass % 7) * 25;
+  }
+
+  const modIdx = Math.floor(seedIndex / VERIFIED_CHRISTIAN_ARTISTS.length) % FOREVER_SEARCH_MODIFIERS.length;
+  const modifier = FOREVER_SEARCH_MODIFIERS[modIdx];
   const dynamicQuery = modifier ? `${effectiveQuery} ${modifier}` : effectiveQuery;
-  const itunesOffset = (cycle % 14) * 15;
 
   try {
     const [ytRes, itunesRes] = await Promise.allSettled([
@@ -873,7 +916,7 @@ export async function fetchLiveChristianMusicBatch(
       fetch(
         `https://itunes.apple.com/search?term=${encodeURIComponent(
           effectiveQuery
-        )}&media=music&entity=song&limit=20&offset=${itunesOffset}`
+        )}&media=music&entity=song&limit=35&offset=${itunesOffset}`
       ),
     ]);
 
@@ -886,14 +929,14 @@ export async function fetchLiveChristianMusicBatch(
           const check = verifyChristianTrack({
             title: item.title,
             artist: item.artist,
-            genreName: baseSeed.genreLabel,
+            genreName: effectiveGenreLabel,
           });
           if (check.isVerifiedChristian && check.matchedArtist) {
             const trk = mapYouTubeRichItemToTrack(
               { ...item, artist: check.matchedArtist },
               idx,
               effectiveGenre,
-              baseSeed.genreLabel
+              effectiveGenreLabel
             );
             const k = getCanonicalTrackKey(trk.title, trk.artist);
             if (!activeKeySet.has(k)) {
@@ -915,7 +958,7 @@ export async function fetchLiveChristianMusicBatch(
               title: item.trackName,
               artist: item.artistName,
               album: item.collectionName,
-              genreName: item.primaryGenreName,
+              genreName: `${item.primaryGenreName || ''} ${effectiveGenreLabel}`,
               explicitFlag:
                 item.trackExplicitness ||
                 item.collectionExplicitness ||
@@ -926,10 +969,10 @@ export async function fetchLiveChristianMusicBatch(
                 { ...item, artistName: check.matchedArtist },
                 idx,
                 effectiveGenre,
-                baseSeed.genreLabel,
-                baseSeed.platform,
-                baseSeed.bpmEstimate,
-                baseSeed.scripture
+                effectiveGenreLabel,
+                effectivePlatform,
+                effectiveBpm,
+                effectiveScripture
               );
               const k = getCanonicalTrackKey(trk.title, trk.artist);
               if (!activeKeySet.has(k)) {
@@ -942,13 +985,12 @@ export async function fetchLiveChristianMusicBatch(
     }
 
     if (tracks.length > 0) {
-      let pushedVerified = false;
       try {
         const vr = await fetch('/api/music/verify-batch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            tracks: tracks.slice(0, 12).map((t) => ({
+            tracks: tracks.slice(0, 18).map((t) => ({
               id: t.id,
               title: t.title,
               artist: t.artist,
@@ -972,18 +1014,12 @@ export async function fetchLiveChristianMusicBatch(
               };
             });
           if (verified.length > 0) {
-            collectedTracks.push(...verified);
-            pushedVerified = true;
+            const toAdd = verified.slice(0, 4);
+            collectedTracks.push(...toAdd);
           }
         }
       } catch {
-        // fallback cleanly
-      }
-      // If verify-batch is temporarily unavailable (e.g. serverless cold start / offline), admit official verified Apple Music releases directly
-      if (!pushedVerified) {
-        collectedTracks.push(
-          ...tracks.filter((t) => t.duration >= 120 && !t.id.startsWith('yt-everywhere-')).slice(0, 3)
-        );
+        // fallback cleanly to Tier 3 full-song verified repertoire
       }
     }
 
@@ -1102,7 +1138,7 @@ export async function searchChristianCatalogLive(query: string): Promise<Track[]
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            tracks: results.slice(0, 12).map((t) => ({
+            tracks: results.slice(0, 18).map((t) => ({
               id: t.id,
               title: t.title,
               artist: t.artist,
@@ -1129,7 +1165,7 @@ export async function searchChristianCatalogLive(query: string): Promise<Track[]
       }
     }
 
-    return results;
+    return results.slice(0, 4);
   } catch {
     return [];
   }

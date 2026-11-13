@@ -1,5 +1,6 @@
 import { Track } from '../data/musicCatalog';
 import {
+  fetchCompleteAudioBlobFromStream,
   getCachedBlobUrlSync,
   getTrackAudioBlob,
   preloadOfflineBlobUrls,
@@ -64,12 +65,16 @@ class SanctuaryAudioEngine {
   private volume = 0.85;
   private resolvedDirectUrls = new Map<string, string>();
   private triedDirectFallbackForRequest = new Set<number>();
+  private recoveringRequestIds = new Set<number>();
   private prewarmedTrackKeys = new Set<string>();
   private stallRecoveryTimer: number | null = null;
   private mediaSessionCallbacksRegistered = false;
   private lastPlayStartedAt = 0;
   private lastEmittedAtMs = 0;
   private lastMediaNavAt = 0;
+  private lastObservedAudioTime = 0;
+  private lastProgressStampMs = 0;
+  private targetStartOffset = 0;
   private readonly pausedSpectrum = Array(16).fill(8);
   private progressListeners = new Set<(currentTime: number, duration: number) => void>();
   private playStateListeners = new Set<(isPlaying: boolean) => void>();
@@ -150,6 +155,19 @@ class SanctuaryAudioEngine {
         });
       }
       ms.playbackState = playing ? 'playing' : 'paused';
+      if (typeof ms.setPositionState === 'function') {
+        try {
+          const safeDur = Math.max(1, this.activeDuration || track?.duration || 220);
+          const safePos = Math.max(0, Math.min(safeDur, this.currentTime || 0));
+          ms.setPositionState({
+            duration: safeDur,
+            playbackRate: 1,
+            position: safePos,
+          });
+        } catch {
+          // ignore invalid position state
+        }
+      }
 
       if (!this.mediaSessionCallbacksRegistered) {
         this.mediaSessionCallbacksRegistered = true;
@@ -192,12 +210,52 @@ class SanctuaryAudioEngine {
   private scheduleStallRecovery() {
     this.clearStallRecovery();
     const capturedReqId = this.playRequestId;
+    const isColdStart = this.currentTime < 0.75;
+    const delayMs = isColdStart ? 12000 : 4500;
     this.stallRecoveryTimer = window.setTimeout(() => {
-      if (capturedReqId !== this.playRequestId || !this.isPlaying || !this.audioEl) return;
-      if (this.audioEl.paused || this.audioEl.readyState < 3) {
-        this.audioEl.play().catch(() => {});
+      if (capturedReqId !== this.playRequestId || !this.isPlaying || !this.audioEl || !this.currentTrack) {
+        return;
       }
-    }, 2500);
+      const resumeOffset = this.currentTime >= 1.5 ? this.currentTime : 0;
+      if (this.audioEl.error || (isColdStart && this.audioEl.readyState < 2)) {
+        void this.handleStreamFallback(this.currentTrack, capturedReqId, resumeOffset);
+        return;
+      }
+      if (this.audioEl.paused || this.audioEl.readyState < 3) {
+        this.audioEl.play().catch((err) => {
+          if (err?.name === 'AbortError' || capturedReqId !== this.playRequestId || !this.isPlaying) {
+            return;
+          }
+          void this.handleStreamFallback(this.currentTrack!, capturedReqId, resumeOffset);
+        });
+      }
+    }, delayMs);
+  }
+
+  private enforceStartPositionOnElement(el: HTMLAudioElement) {
+    if (this.targetStartOffset <= 0.25) {
+      if (el.currentTime > 0.25) {
+        try {
+          el.currentTime = 0;
+        } catch {
+          // ignore
+        }
+      }
+      this.currentTime = 0;
+      this.lastObservedAudioTime = 0;
+    } else if (
+      Number.isFinite(el.duration) &&
+      el.duration > this.targetStartOffset + 2 &&
+      Math.abs(el.currentTime - this.targetStartOffset) > 1.2
+    ) {
+      try {
+        el.currentTime = this.targetStartOffset;
+        this.currentTime = this.targetStartOffset;
+        this.lastObservedAudioTime = this.targetStartOffset;
+      } catch {
+        // ignore
+      }
+    }
   }
 
   private getOrCreateAudioElement(): HTMLAudioElement {
@@ -216,13 +274,18 @@ class SanctuaryAudioEngine {
           if (this.currentTrack) {
             this.currentTrack.duration = this.activeDuration;
           }
-          this.emitTick();
         }
+        this.enforceStartPositionOnElement(el);
+        this.emitTick();
       });
 
       el.addEventListener('canplay', () => {
         this.clearWatchdog();
         this.clearStallRecovery();
+        this.enforceStartPositionOnElement(el);
+        if (this.targetStartOffset <= 0.25 || (el.duration > 0 && Math.abs(el.currentTime - this.targetStartOffset) <= 1.2)) {
+          this.targetStartOffset = 0;
+        }
         if (this.isPlaying && el.paused) {
           el.play().catch(() => {});
         }
@@ -231,6 +294,7 @@ class SanctuaryAudioEngine {
       el.addEventListener('playing', () => {
         this.clearWatchdog();
         this.clearStallRecovery();
+        this.targetStartOffset = 0;
         if (this.currentTrack) {
           this.updateMediaSession(this.currentTrack, true);
         }
@@ -249,6 +313,10 @@ class SanctuaryAudioEngine {
       el.addEventListener('timeupdate', () => {
         if (!this.isPlaying || !this.currentTrack) return;
         this.clearStallRecovery();
+        if (Math.abs(el.currentTime - this.lastObservedAudioTime) > 0.1) {
+          this.lastObservedAudioTime = el.currentTime;
+          this.lastProgressStampMs = Date.now();
+        }
         this.currentTime = el.currentTime;
         if (Number.isFinite(el.duration) && el.duration >= 95) {
           this.activeDuration = Math.round(el.duration);
@@ -261,14 +329,20 @@ class SanctuaryAudioEngine {
 
       el.addEventListener('pause', () => {
         if (!this.isPlaying || el.ended || !this.currentTrack) return;
-        // Avoid aggressive auto-resume loops if audio element has an error or isn't ready
-        if (el.error || el.readyState < 2) return;
+        if (el.error) {
+          this.handleStreamFallback(this.currentTrack, this.playRequestId, this.currentTime);
+          return;
+        }
         const capturedReq = this.playRequestId;
         window.setTimeout(() => {
           if (capturedReq === this.playRequestId && this.isPlaying && el.paused && !el.ended && !el.error) {
-            el.play().catch(() => {});
+            el.play().catch(() => {
+              if (this.currentTrack && capturedReq === this.playRequestId) {
+                void this.handleStreamFallback(this.currentTrack, capturedReq, this.currentTime);
+              }
+            });
           }
-        }, 300);
+        }, 450);
       });
 
       el.addEventListener('error', () => {
@@ -277,25 +351,34 @@ class SanctuaryAudioEngine {
       });
 
       el.addEventListener('ended', () => {
-        if (!this.isPlaying) return;
-        // Anti-rapid-skip circuit breaker: never treat playback ending < 5s after load or < 35s played as natural completion
+        if (!this.isPlaying || !this.currentTrack) return;
         const msSinceStart = Date.now() - this.lastPlayStartedAt;
-        if (msSinceStart < 5000 || this.currentTime < 35) {
-          return;
-        }
         const knownDur =
-          Number.isFinite(el.duration) && el.duration >= 60 ? el.duration : this.activeDuration;
+          Number.isFinite(el.duration) && el.duration >= 90 ? el.duration : this.activeDuration;
         const realEndThreshold = Math.max(45, knownDur - 12);
+
+        // If audio cut off prematurely (e.g., ~20s chunk boundary or < realEndThreshold), recover seamlessly at exact timestamp instead of freezing silent!
         if (
-          el.src.includes('/api/music/full-song') &&
           this.currentTime < realEndThreshold &&
           !this.triedDirectFallbackForRequest.has(this.playRequestId)
         ) {
-          this.handleStreamFallback(this.currentTrack!, this.playRequestId, this.currentTime);
+          void this.handleStreamFallback(this.currentTrack, this.playRequestId, this.currentTime);
+          return;
+        }
+        if (msSinceStart < 4000 || this.currentTime < 35) {
+          // Even fallback clip ended very early (< 35s); reset to 0:00 and pause cleanly
+          this.currentTime = 0;
+          this.lastObservedAudioTime = 0;
+          this.targetStartOffset = 0;
+          try {
+            el.currentTime = 0;
+          } catch {
+            // ignore
+          }
+          this.pause();
           return;
         }
         if (this.currentTime < realEndThreshold) {
-          // Ended unexpectedly early (e.g., 30s fallback clip ended) — pause instead of skipping playlist
           this.pause();
           return;
         }
@@ -311,17 +394,21 @@ class SanctuaryAudioEngine {
     this.isPlaying = false;
     this.emitPlayState(false);
     this.currentTime = 0;
+    this.lastObservedAudioTime = 0;
+    this.targetStartOffset = 0;
     this.stopProgressTimer();
     this.clearWatchdog();
     this.clearStallRecovery();
     if (this.audioEl) {
       try {
         this.audioEl.pause();
+        this.audioEl.currentTime = 0;
       } catch {
         // ignore
       }
     }
     this.updateMediaSession(this.currentTrack, false);
+    this.emitTick();
     if (this.onEndedCallback) {
       this.onEndedCallback();
     }
@@ -331,7 +418,9 @@ class SanctuaryAudioEngine {
     return (
       this.currentTrack !== null &&
       this.audioEl !== null &&
-      Boolean(this.audioEl.src)
+      Boolean(this.audioEl.src) &&
+      !this.audioEl.ended &&
+      !this.audioEl.error
     );
   }
 
@@ -370,15 +459,21 @@ class SanctuaryAudioEngine {
     }
   }
 
-  public stopCurrentPlayback() {
+  public stopCurrentPlayback(clearSrc = false) {
     this.stopProgressTimer();
     this.clearWatchdog();
     this.clearStallRecovery();
     this.currentTime = 0;
+    this.lastObservedAudioTime = 0;
+    this.targetStartOffset = 0;
     if (this.audioEl) {
       try {
         this.audioEl.pause();
         this.audioEl.currentTime = 0;
+        if (clearSrc && this.audioEl.hasAttribute('src')) {
+          this.audioEl.removeAttribute('src');
+          this.audioEl.load();
+        }
       } catch {
         // ignore reset errors
       }
@@ -415,70 +510,96 @@ class SanctuaryAudioEngine {
 
   private async handleStreamFallback(track: Track, requestId: number, startOffset = 0) {
     if (requestId !== this.playRequestId || !this.isPlaying) return;
+    if (this.recoveringRequestIds.has(requestId) || this.triedDirectFallbackForRequest.has(requestId)) {
+      return;
+    }
+    this.recoveringRequestIds.add(requestId);
+    this.triedDirectFallbackForRequest.add(requestId);
 
-    if (!this.triedDirectFallbackForRequest.has(requestId)) {
-      this.triedDirectFallbackForRequest.add(requestId);
+    const normalizedSeek = Number.isFinite(startOffset) && startOffset > 1.5 ? startOffset : 0;
 
-      // 1. Check async IndexedDB full song blob first
+    const playRecoveredUrl = async (srcUrl: string, seekTarget: number) => {
+      if (requestId !== this.playRequestId || !this.isPlaying) return;
+      const safeSeek = Number.isFinite(seekTarget) && seekTarget > 1.5 ? seekTarget : 0;
+      this.targetStartOffset = safeSeek;
+      this.currentTime = safeSeek;
+      const audio = this.getOrCreateAudioElement();
       try {
-        const blob = await getTrackAudioBlob(track.id);
-        if (requestId !== this.playRequestId || !this.isPlaying) return;
-        if (blob && blob.size > 1000) {
-          const blobUrl = URL.createObjectURL(blob);
-          const audio = this.getOrCreateAudioElement();
-          audio.src = blobUrl;
-          audio.volume = this.volume;
+        audio.pause();
+        audio.currentTime = 0;
+        if (audio.hasAttribute('src')) {
+          audio.removeAttribute('src');
           audio.load();
-          if (startOffset > 0) {
+        }
+      } catch {
+        // ignore
+      }
+      audio.src = srcUrl;
+      audio.volume = this.volume;
+      audio.muted = false;
+      audio.load();
+      audio.addEventListener(
+        'loadedmetadata',
+        () => {
+          if (requestId !== this.playRequestId) return;
+          if (safeSeek > 1.5 && audio.duration > safeSeek + 2) {
             try {
-              audio.currentTime = startOffset;
+              audio.currentTime = safeSeek;
+            } catch {
+              // ignore
+            }
+          } else if (safeSeek === 0 && audio.currentTime > 0.25) {
+            try {
+              audio.currentTime = 0;
             } catch {
               // ignore
             }
           }
-          await audio.play();
-          this.startProgressLoop();
+        },
+        { once: true }
+      );
+      this.lastObservedAudioTime = safeSeek;
+      this.lastProgressStampMs = Date.now();
+      await audio.play();
+      if (requestId === this.playRequestId && safeSeek === 0 && audio.currentTime > 0.25) {
+        try {
+          audio.currentTime = 0;
+        } catch {
+          // ignore
+        }
+      }
+      this.startProgressLoop();
+    };
+
+    try {
+      // 1. Check async IndexedDB full song blob first
+      try {
+        const blob = await getTrackAudioBlob(track.id);
+        if (requestId !== this.playRequestId || !this.isPlaying) return;
+        if (blob && blob.size > 850000) {
+          await playRecoveredUrl(URL.createObjectURL(blob), normalizedSeek);
           return;
         }
       } catch {
         // continue
       }
 
-      // 2. Probe full-length server stream first; only retry /api/music/full-song when healthy
-      try {
-        if (requestId !== this.playRequestId || !this.isPlaying) return;
-        const probe = await fetch(getFullSongStreamUrl(track), { method: 'HEAD' });
-        if (requestId !== this.playRequestId || !this.isPlaying) return;
-        if (probe.ok) {
-          const retryUrl = `${getFullSongStreamUrl(track)}&retry=1`;
-          const audio = this.getOrCreateAudioElement();
-          audio.src = retryUrl;
-          audio.volume = this.volume;
-          audio.load();
-          if (startOffset > 2) {
-            audio.addEventListener(
-              'canplay',
-              () => {
-                if (requestId === this.playRequestId && audio.duration > startOffset + 2) {
-                  try {
-                    audio.currentTime = startOffset;
-                  } catch {
-                    // ignore
-                  }
-                }
-              },
-              { once: true }
-            );
+      // 2. Assemble ALL chunks of /api/music/full-song into a complete local Blob URL (retry once if transient timeout)
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const assembled = await fetchCompleteAudioBlobFromStream(track);
+          if (requestId !== this.playRequestId || !this.isPlaying) return;
+          if (assembled?.blobUrl) {
+            await playRecoveredUrl(assembled.blobUrl, normalizedSeek);
+            return;
           }
-          await audio.play();
-          this.startProgressLoop();
-          return;
+        } catch {
+          // retry once
         }
-      } catch {
-        // continue to direct CDN fallback
+        if (requestId !== this.playRequestId || !this.isPlaying) return;
       }
 
-      // 3. Direct CDN fallback (plays cleanly even if serverless /api/* is offline or unreachable)
+      // 3. Direct CDN fallback (ONLY when /api/music/full-song is unavailable / 404)
       try {
         const directUrl =
           track.directStreamUrl ||
@@ -487,12 +608,7 @@ class SanctuaryAudioEngine {
         if (requestId !== this.playRequestId || !this.isPlaying) return;
         if (directUrl) {
           this.resolvedDirectUrls.set(track.id, directUrl);
-          const audio = this.getOrCreateAudioElement();
-          audio.src = directUrl;
-          audio.volume = this.volume;
-          audio.load();
-          await audio.play();
-          this.startProgressLoop();
+          await playRecoveredUrl(directUrl, 0);
           return;
         }
       } catch {
@@ -500,21 +616,30 @@ class SanctuaryAudioEngine {
       }
 
       if (requestId === this.playRequestId && this.isPlaying) {
+        this.currentTime = 0;
+        this.lastObservedAudioTime = 0;
+        this.targetStartOffset = 0;
         this.pause();
       }
+    } finally {
+      this.recoveringRequestIds.delete(requestId);
     }
   }
 
   public loadAndPlay(track: Track, startOffset = 0) {
     const requestId = ++this.playRequestId;
+    const targetOffset = Number.isFinite(startOffset) && startOffset > 0.5 ? startOffset : 0;
 
-    // 1. Unlock Web Audio & stop previous playback synchronously inside the user gesture!
+    // 1. Unlock Web Audio & stop/clear previous playback synchronously inside the user gesture!
     this.ensureAudioContextUnlocked();
-    this.stopCurrentPlayback();
+    this.stopCurrentPlayback(true);
+    this.targetStartOffset = targetOffset;
 
     this.currentTrack = track;
-    this.currentTime = startOffset;
+    this.currentTime = targetOffset;
     this.lastPlayStartedAt = Date.now();
+    this.lastObservedAudioTime = targetOffset;
+    this.lastProgressStampMs = Date.now();
     this.activeDuration = Math.max(180, track.duration || 220);
     this.isPlaying = true;
     this.emitPlayState(true);
@@ -532,13 +657,13 @@ class SanctuaryAudioEngine {
     audio.muted = false;
     audio.load();
 
-    // Allow 15 seconds for audio loading before checking stall
+    // Allow 20 seconds for cold-start audio loading before checking stall
     this.stallWatchdogTimer = window.setTimeout(() => {
       if (requestId !== this.playRequestId || !this.isPlaying) return;
-      if (!audio.currentTime && (audio.paused || audio.readyState < 2)) {
-        this.handleStreamFallback(track, requestId, startOffset);
+      if (audio.currentTime < 0.5 && (audio.paused || audio.readyState < 2)) {
+        void this.handleStreamFallback(track, requestId, targetOffset);
       }
-    }, 15000);
+    }, 20000);
 
     // 3. Call audio.play() synchronously within the user's click/tap event!
     const playPromise = audio.play();
@@ -549,13 +674,22 @@ class SanctuaryAudioEngine {
             audio.pause();
             return;
           }
-          if (
-            startOffset > 0 &&
+          if (targetOffset === 0) {
+            if (audio.currentTime > 0.25) {
+              try {
+                audio.currentTime = 0;
+              } catch {
+                // ignore
+              }
+            }
+            this.currentTime = 0;
+            this.lastObservedAudioTime = 0;
+          } else if (
             Number.isFinite(audio.duration) &&
-            audio.duration > startOffset + 2
+            audio.duration > targetOffset + 2
           ) {
             try {
-              audio.currentTime = startOffset;
+              audio.currentTime = targetOffset;
             } catch {
               // ignore
             }
@@ -569,7 +703,7 @@ class SanctuaryAudioEngine {
             this.pause();
             return;
           }
-          await this.handleStreamFallback(track, requestId, startOffset);
+          await this.handleStreamFallback(track, requestId, targetOffset);
         });
     }
   }
@@ -598,13 +732,21 @@ class SanctuaryAudioEngine {
     if (!targetTrack) return;
 
     if (!this.currentTrack) {
-      this.loadAndPlay(targetTrack, this.currentTime);
+      this.loadAndPlay(targetTrack, 0);
       return;
     }
 
-    if (this.audioEl && this.audioEl.src && this.audioEl.readyState >= 2) {
+    if (
+      this.audioEl &&
+      this.audioEl.src &&
+      this.audioEl.readyState >= 2 &&
+      !this.audioEl.ended &&
+      !this.audioEl.error &&
+      this.currentTime < Math.max(10, this.activeDuration - 2)
+    ) {
       const requestId = ++this.playRequestId;
       this.isPlaying = true;
+      this.emitPlayState(true);
       this.updateMediaSession(targetTrack, true);
       this.startProgressLoop();
       this.audioEl
@@ -618,11 +760,16 @@ class SanctuaryAudioEngine {
         })
         .catch(() => {
           if (this.currentTrack) {
-            this.loadAndPlay(this.currentTrack, this.currentTime);
+            const safeOffset = this.currentTime >= 1.5 ? this.currentTime : 0;
+            this.loadAndPlay(this.currentTrack, safeOffset);
           }
         });
     } else {
-      this.loadAndPlay(this.currentTrack, this.currentTime);
+      const safeOffset =
+        this.audioEl?.ended || this.currentTime >= Math.max(10, this.activeDuration - 2) || this.currentTime < 1.5
+          ? 0
+          : this.currentTime;
+      this.loadAndPlay(this.currentTrack, safeOffset);
     }
   }
 
@@ -653,14 +800,30 @@ class SanctuaryAudioEngine {
 
   private startProgressLoop() {
     this.stopProgressTimer();
+    const capturedReq = this.playRequestId;
+    this.lastProgressStampMs = Date.now();
     this.progressTimer = window.setInterval(() => {
       if (!this.isPlaying || !this.currentTrack || !this.audioEl) return;
+      const now = Date.now();
       if (!this.audioEl.paused) {
+        if (Math.abs(this.audioEl.currentTime - this.lastObservedAudioTime) > 0.1) {
+          this.lastObservedAudioTime = this.audioEl.currentTime;
+          this.lastProgressStampMs = now;
+        }
         this.currentTime = this.audioEl.currentTime;
         if (Number.isFinite(this.audioEl.duration) && this.audioEl.duration >= 95) {
           this.activeDuration = Math.round(this.audioEl.duration);
         }
         this.emitTick();
+      }
+      // Mid-song freeze watchdog: if audio played past 2s and froze for > 5s (e.g. at a 20s chunk boundary), assemble full Blob & resume
+      if (
+        this.currentTime >= 2 &&
+        now - this.lastProgressStampMs > 5000 &&
+        !this.recoveringRequestIds.has(capturedReq) &&
+        !this.triedDirectFallbackForRequest.has(capturedReq)
+      ) {
+        void this.handleStreamFallback(this.currentTrack, capturedReq, this.currentTime);
       }
     }, 160);
   }

@@ -63,7 +63,7 @@ export const CalisthenicsCoachView: React.FC<CalisthenicsCoachViewProps> = ({
 
   // Rest countdown timer state
   const [restSecondsLeft, setRestSecondsLeft] = useState<number | null>(null);
-  const [, setRestTotalSeconds] = useState<number>(90);
+  const [, setRestTotalSeconds] = useState<number>(45);
 
   useEffect(() => {
     if (restSecondsLeft === null) return;
@@ -125,7 +125,7 @@ export const CalisthenicsCoachView: React.FC<CalisthenicsCoachViewProps> = ({
         <div className="absolute inset-0 p-5 sm:p-7 flex flex-col justify-between">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-xs font-medium text-amber-400">
-              <span>365-Day Smart Calisthenics & Devotional</span>
+              <span>365-Day No-Gear Calisthenics & Toning</span>
               <span aria-hidden="true">·</span>
               <span className="font-mono">Week {plan.weekNumber} of 52</span>
               <span aria-hidden="true">·</span>
@@ -296,10 +296,10 @@ export const CalisthenicsCoachView: React.FC<CalisthenicsCoachViewProps> = ({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
             {[
-              { q: 1, label: 'Q1: Days 1–90 (Foundation)', start: 1 },
-              { q: 2, label: 'Q2: Days 91–180 (Explosive)', start: 91 },
-              { q: 3, label: 'Q3: Days 181–270 (Muscle-Up & Levers)', start: 181 },
-              { q: 4, label: 'Q4: Days 271–365 (Elite Spartan)', start: 271 },
+              { q: 1, label: 'Q1: Days 1–90 (Beginner)', start: 1 },
+              { q: 2, label: 'Q2: Days 91–180 (Tone Builder)', start: 91 },
+              { q: 3, label: 'Q3: Days 181–270 (Sculpt & Strength)', start: 181 },
+              { q: 4, label: 'Q4: Days 271–365 (Full Definition)', start: 271 },
             ].map((item) => (
               <button
                 key={item.q}
@@ -404,7 +404,7 @@ export const CalisthenicsCoachView: React.FC<CalisthenicsCoachViewProps> = ({
             }`}
           >
             <Bike className="w-4 h-4 text-amber-500" />
-            <span>Bike Ride Cadence</span>
+            <span>Cardio & Optional Bike</span>
           </button>
           <button
             onClick={() => setActiveMode('devotional')}
@@ -437,7 +437,7 @@ export const CalisthenicsCoachView: React.FC<CalisthenicsCoachViewProps> = ({
             </div>
           ) : (
             <div className="flex items-center gap-1.5">
-              {[60, 90, 120].map((sec) => (
+              {[45, 60, 90].map((sec) => (
                 <button
                   key={sec}
                   onClick={() => startRestTimer(sec)}
@@ -525,7 +525,7 @@ export const CalisthenicsCoachView: React.FC<CalisthenicsCoachViewProps> = ({
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-xs text-amber-500 font-semibold">
-                    Outdoor Road & Indoor Cycling Protocol
+                    No-Gear Walk/Jog or Optional Cycling Protocol
                   </div>
                   <h3 className="text-lg font-bold text-slate-900 dark:text-white mt-1">
                     {plan.bikeProtocol.title}
@@ -538,12 +538,12 @@ export const CalisthenicsCoachView: React.FC<CalisthenicsCoachViewProps> = ({
                 exercise={{
                   id: `bike-demo-${plan.dayNumber}`,
                   name: `${plan.bikeProtocol.title} (${plan.bikeProtocol.targetCadenceRpm})`,
-                  category: 'Legs & Plyo',
-                  sets: 6,
+                  category: 'Warm-Up & Flow',
+                  sets: 4,
                   repsOrHold: plan.bikeProtocol.targetCadenceRpm,
-                  restSeconds: 60,
+                  restSeconds: 45,
                   tempo: 'Cadence Lock',
-                  equipment: 'Road / Stationary Bike',
+                  equipment: 'No Equipment (Walk/Jog) or Optional Bike',
                   formCue: plan.bikeProtocol.intervalsSummary,
                 }}
               />
@@ -647,7 +647,7 @@ export const CalisthenicsCoachView: React.FC<CalisthenicsCoachViewProps> = ({
             <div className="rounded-xl bg-amber-500/10 border border-amber-500/20 p-3.5">
               <div className="flex items-center gap-2 text-xs font-bold text-amber-500 mb-1">
                 <Flame className="w-3.5 h-3.5" />
-                <span>Today’s Strict Rule</span>
+                <span>Today’s Focus Rule</span>
               </div>
               <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
                 {plan.devotional.dailyDisciplineChallenge}

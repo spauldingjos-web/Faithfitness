@@ -98,7 +98,7 @@ function mergeAndDedupeCatalog(candidates: Track[]): Track[] {
       title: item.title,
       artist: item.artist,
       album: item.album,
-      genreName: item.genre,
+      genreName: item.genreLabel || item.genre,
     }).isVerifiedChristian;
     if (!ok) continue;
     const key = getCanonicalTrackKey(item.title, item.artist);
@@ -374,10 +374,11 @@ export default function App() {
 
   // Wire up Audio Engine callbacks
   const handleSelectTrack = useCallback((track: Track, startOffset = 0) => {
+    const safeOffset = Number.isFinite(startOffset) && startOffset > 0.5 ? startOffset : 0;
     setCurrentTrack(track);
     setDuration(track.duration);
     setIsPlaying(true);
-    audioEngine.loadAndPlay(track, startOffset);
+    audioEngine.loadAndPlay(track, safeOffset);
     broadcastSync({ type: 'TRACK_CHANGE', track });
 
     // Pre-warm next 3 upcoming tracks in the background for zero-delay transitions
@@ -481,7 +482,14 @@ export default function App() {
         const snapshotKeys = new Set(
           tracksRef.current.map((t) => getCanonicalTrackKey(t.title, t.artist))
         );
-        const discovered = await fetchLiveChristianMusicBatch(nextSeed, snapshotKeys);
+        let discovered = await fetchLiveChristianMusicBatch(nextSeed, snapshotKeys);
+        if (discovered.length === 0) {
+          const skipSeed = liveSeedIdxRef.current;
+          liveSeedIdxRef.current = skipSeed + 1;
+          setLiveSeedIdx(skipSeed + 1);
+          saveDiscoveryCursor(skipSeed + 1);
+          discovered = await fetchLiveChristianMusicBatch(skipSeed, snapshotKeys);
+        }
 
         let addedCount = 0;
         const prevExistingIds = new Set(tracksRef.current.map((t) => t.id));
@@ -494,7 +502,7 @@ export default function App() {
             title: d.title,
             artist: d.artist,
             album: d.album,
-            genreName: d.genre,
+            genreName: d.genreLabel || d.genre,
           });
           if (!check.isVerifiedChristian) continue;
           const key = getCanonicalTrackKey(d.title, d.artist);
@@ -560,7 +568,7 @@ export default function App() {
     if (typeof window !== 'undefined' && 'caches' in window) {
       caches.keys().then((keys) => {
         keys.forEach((k) => {
-          if (k !== 'sanctuary-pulse-v16' && k !== 'sanctuary-audio-vault-v16') {
+          if (k !== 'sanctuary-pulse-v19' && k !== 'sanctuary-audio-vault-v19') {
             caches.delete(k).catch(() => {});
           }
         });
@@ -950,7 +958,8 @@ export default function App() {
       if (audioEngine.hasActiveAudio()) {
         audioEngine.resume(currentTrack);
       } else {
-        audioEngine.loadAndPlay(currentTrack, audioEngine.getCurrentTime());
+        const curTime = audioEngine.getCurrentTime();
+        audioEngine.loadAndPlay(currentTrack, curTime >= 2 ? curTime : 0);
       }
       setIsPlaying(true);
     }
@@ -965,7 +974,8 @@ export default function App() {
       if (audioEngine.hasActiveAudio()) {
         audioEngine.resume(trk);
       } else {
-        audioEngine.loadAndPlay(trk, audioEngine.getCurrentTime());
+        const curTime = audioEngine.getCurrentTime();
+        audioEngine.loadAndPlay(trk, curTime >= 2 ? curTime : 0);
       }
       setIsPlaying(true);
     }

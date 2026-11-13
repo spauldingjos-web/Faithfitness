@@ -1621,10 +1621,17 @@ async function assembleFullLengthSong(
 
             const buffers = await Promise.all(
               allUrls.map(async (u) => {
-                const r = await fetch(u);
+                let r = await fetch(u);
+                if (!r.ok) {
+                  r = await fetch(u);
+                }
+                if (!r.ok) {
+                  throw new Error(`HLS segment failed: ${r.status}`);
+                }
                 return Buffer.from(await r.arrayBuffer());
               })
             );
+            if (buffers.some((b) => b.length === 0)) continue;
             const combined = Buffer.concat(buffers);
             if (combined.length < 250000) continue;
 
@@ -1696,20 +1703,26 @@ app.get('/api/music/full-song', async (req, res) => {
 
     const totalLength = song.buffer.length;
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader(
+      'Access-Control-Expose-Headers',
+      'Content-Range, Content-Length, ETag, X-Full-Duration-Sec, X-Total-Length'
+    );
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.setHeader('Content-Type', song.contentType);
+    res.setHeader('ETag', `W/"${totalLength}-${song.durationSec}"`);
     res.setHeader('X-Full-Duration-Sec', String(song.durationSec));
+    res.setHeader('X-Total-Length', String(totalLength));
 
     if (downloadFilename) {
       res.setHeader('Content-Disposition', `attachment; filename="${downloadFilename}"`);
     }
 
     const range = req.headers.range;
-    const maxChunkBytes = downloadFilename ? totalLength : 1_500_000;
+    const maxChunkBytes = downloadFilename ? totalLength : 3_500_000;
 
-    // On Vercel serverless, redirect long full-song audio playback directly to SoundCloud progressive CDN when available (bypasses 4.5MB lambda cap cleanly)
-    if (!downloadFilename && process.env.VERCEL && song.progressiveUrl && !range) {
+    // On Vercel serverless, ALWAYS redirect playback to SoundCloud progressive CDN when available (handles native Range requests across the whole song cleanly)
+    if (!downloadFilename && process.env.VERCEL && song.progressiveUrl) {
       res.redirect(302, song.progressiveUrl);
       return;
     }
@@ -1739,7 +1752,7 @@ app.get('/api/music/full-song', async (req, res) => {
     }
 
     // Never exceed Vercel 4.5MB serverless payload limit on un-ranged requests
-    if (!downloadFilename && totalLength > 3_800_000) {
+    if (!downloadFilename && totalLength > 3_500_000) {
       const clampedEnd = Math.min(totalLength - 1, maxChunkBytes - 1);
       const chunkLength = clampedEnd + 1;
       res.status(206);
@@ -2161,12 +2174,17 @@ async function verifySingleTrackForCatalog(
     });
     const top = scMatches[0];
     const durSec = Math.round((top.duration || 0) / 1000);
+    if (validDurs.length > 0 && !validDurs.some((d) => Math.abs(durSec - d) <= 22)) {
+      const fail = { verified: false, durationSec: 0, matchedTitle: cleanTitle, matchedArtist: cleanArtist, hasLyrics: false, ts: Date.now() };
+      verifyBatchCache.set(key, fail);
+      return fail;
+    }
 
-    // Require true synced LRC timestamps matching the actual SoundCloud audio duration within 8 seconds
+    // Check LRCLIB synced lyrics when available, but allow official full-length SoundCloud studio releases even on deep cuts without LRC
     const lrc = await Promise.race([
       fetchBestLrcLyrics(cleanArtist, cleanTitle, durSec),
       new Promise<LrcMatchPayload>((resolve) =>
-        setTimeout(() => resolve({ synced: [], plain: [], lrcDurationSec: 0 }), 2200)
+        setTimeout(() => resolve({ synced: [], plain: [], lrcDurationSec: 0 }), 1800)
       ),
     ]);
 
@@ -2174,9 +2192,13 @@ async function verifySingleTrackForCatalog(
     const hasSyncedLyrics =
       lrc.synced.length >= 6 &&
       Boolean(lrc.hasTrueLrcTimestamps) &&
-      (rawLrcDur < 95 || Math.abs(durSec - rawLrcDur) <= 8);
+      (rawLrcDur < 95 || Math.abs(durSec - rawLrcDur) <= 10);
 
-    const ok = hasSyncedLyrics;
+    const matchesExpectedDuration =
+      hintDuration && hintDuration >= 95
+        ? Math.abs(durSec - hintDuration) <= 22
+        : durSec >= 100 && durSec <= 500;
+    const ok = hasSyncedLyrics || (durSec >= 100 && durSec <= 500 && matchesExpectedDuration);
     const result = {
       verified: ok,
       durationSec: durSec,
@@ -2405,6 +2427,53 @@ const SERVER_PERPETUAL_SEEDS: Array<{
   { artist: 'Elevation Worship', genre: 'worship', genreLabel: 'Praise & Worship', bpm: 128, verse: 'Psalm 95:1' },
   { artist: 'Brandon Lake', genre: 'worship', genreLabel: 'Modern Worship', bpm: 112, verse: 'Psalm 103:1' },
   { artist: 'Hawk Nelson', genre: 'punk-ska', genreLabel: 'Christian Pop-Punk', bpm: 160, verse: 'Romans 8:38' },
+  { artist: 'Fit For A King', genre: 'metal-hardcore', genreLabel: 'Christian Metalcore', bpm: 170, verse: 'Psalm 23:4' },
+  { artist: 'Wolves At The Gate', genre: 'rock', genreLabel: 'Christian Post-Hardcore', bpm: 160, verse: 'Isaiah 61:1' },
+  { artist: 'For Today', genre: 'metal-hardcore', genreLabel: 'Christian Metalcore', bpm: 172, verse: 'Joshua 24:15' },
+  { artist: 'Living Sacrifice', genre: 'metal-hardcore', genreLabel: 'Christian Metal', bpm: 174, verse: 'Romans 12:1' },
+  { artist: 'War of Ages', genre: 'metal-hardcore', genreLabel: 'Christian Metalcore', bpm: 170, verse: 'Hebrews 12:29' },
+  { artist: 'Memphis May Fire', genre: 'metal-hardcore', genreLabel: 'Christian Metalcore', bpm: 162, verse: 'Psalm 23:4' },
+  { artist: 'Phinehas', genre: 'metal-hardcore', genreLabel: 'Christian Metalcore', bpm: 172, verse: 'Numbers 25:11' },
+  { artist: 'Hulvey', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 142, verse: 'John 16:33' },
+  { artist: 'nobigdyl', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 142, verse: 'John 8:32' },
+  { artist: '1K Phew', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 146, verse: 'Psalm 27:1' },
+  { artist: 'Tedashii', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 144, verse: 'Romans 8:31' },
+  { artist: 'Caleb Gordon', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 140, verse: 'Psalm 118:24' },
+  { artist: 'Alex Jean', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 144, verse: 'Ephesians 6:10' },
+  { artist: 'Gawvi', genre: 'workout-edm', genreLabel: 'Christian EDM / Trap', bpm: 150, verse: 'Psalm 149:3' },
+  { artist: 'Shane & Shane', genre: 'worship', genreLabel: 'Acoustic Worship', bpm: 96, verse: 'Psalm 42:1' },
+  { artist: 'Bethel Music', genre: 'worship', genreLabel: 'Modern Worship', bpm: 98, verse: 'Psalm 100:4' },
+  { artist: 'Maverick City Music', genre: 'worship', genreLabel: 'Gospel & Worship', bpm: 94, verse: 'Psalm 150:6' },
+  { artist: 'Charity Gayle', genre: 'worship', genreLabel: 'Praise & Worship', bpm: 96, verse: 'Isaiah 6:3' },
+  { artist: 'Tasha Cobbs Leonard', genre: 'rnb', genreLabel: 'Gospel Soul & Worship', bpm: 98, verse: 'Psalm 27:4' },
+  { artist: 'Kirk Franklin', genre: 'rnb', genreLabel: 'Gospel R&B & Choir', bpm: 122, verse: 'Psalm 150:1' },
+  { artist: 'Tye Tribbett', genre: 'rnb', genreLabel: 'High-Energy Gospel', bpm: 132, verse: 'Psalm 150:1' },
+  { artist: 'Lauren Daigle', genre: 'ai-originals', genreLabel: 'Contemporary Christian', bpm: 112, verse: 'Psalm 139:14' },
+  { artist: 'for KING & COUNTRY', genre: 'ai-originals', genreLabel: 'Contemporary Christian', bpm: 126, verse: 'Philippians 4:13' },
+  { artist: 'We The Kingdom', genre: 'country-southern', genreLabel: 'Southern Worship Rock', bpm: 124, verse: 'Psalm 100:2' },
+  { artist: 'CAIN', genre: 'country-southern', genreLabel: 'Christian Country', bpm: 120, verse: 'Isaiah 43:2' },
+  { artist: 'Josiah Queen', genre: 'worship', genreLabel: 'Christian Indie Folk', bpm: 130, verse: 'Luke 15:20' },
+  { artist: 'Seph Schlueter', genre: 'ai-originals', genreLabel: 'Contemporary Christian', bpm: 118, verse: 'Psalm 103:1' },
+  { artist: 'Rhett Walker', genre: 'country-southern', genreLabel: 'Christian Southern Rock', bpm: 122, verse: 'Romans 15:13' },
+  { artist: 'Jordan Feliz', genre: 'ai-originals', genreLabel: 'Contemporary Christian', bpm: 124, verse: 'Psalm 118:24' },
+  { artist: 'Kutless', genre: 'rock', genreLabel: 'Christian Rock', bpm: 146, verse: 'Psalm 18:2' },
+  { artist: 'Pillar', genre: 'rock', genreLabel: 'Christian Hard Rock', bpm: 152, verse: 'Joshua 1:9' },
+  { artist: 'Emery', genre: 'rock', genreLabel: 'Christian Post-Hardcore', bpm: 156, verse: 'Psalm 46:1' },
+  { artist: 'Third Day', genre: 'country-southern', genreLabel: 'Southern Christian Rock', bpm: 124, verse: 'John 14:6' },
+  { artist: 'Audio Adrenaline', genre: 'rock', genreLabel: 'Christian Rock', bpm: 148, verse: 'Romans 12:2' },
+  { artist: 'DC Talk', genre: 'hiphop', genreLabel: 'Classic Christian Rock/Rap', bpm: 136, verse: '1 John 4:19' },
+  { artist: 'Five Iron Frenzy', genre: 'punk-ska', genreLabel: 'Christian Ska-Punk', bpm: 166, verse: 'Micah 6:8' },
+  { artist: 'The O.C. Supertones', genre: 'punk-ska', genreLabel: 'Christian Ska-Punk', bpm: 164, verse: 'Ephesians 6:12' },
+  { artist: 'Papa San', genre: 'reggae-afro', genreLabel: 'Christian Reggae', bpm: 116, verse: 'Psalm 47:1' },
+  { artist: 'Sherwin Gardner', genre: 'reggae-afro', genreLabel: 'Caribbean Gospel', bpm: 114, verse: 'Jeremiah 29:11' },
+  { artist: 'Guvna B', genre: 'hiphop', genreLabel: 'UK Christian Hip-Hop', bpm: 142, verse: 'Psalm 23:1' },
+  { artist: 'Social Club Misfits', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 138, verse: 'Philippians 4:13' },
+  { artist: 'Zauntee', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 152, verse: 'Joshua 1:9' },
+  { artist: 'Derek Minor', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 140, verse: 'Romans 8:28' },
+  { artist: 'Bizzle', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 144, verse: 'Matthew 6:24' },
+  { artist: 'Aaron Cole', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 138, verse: 'Psalm 27:1' },
+  { artist: 'Steven Malcolm', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 144, verse: '1 Corinthians 16:13' },
+  { artist: 'CalledOut Music', genre: 'reggae-afro', genreLabel: 'Afro-Gospel / Soul', bpm: 112, verse: 'Romans 8:31' },
 ];
 
 const discoveredCatalogPool: DiscoveredServerTrack[] = [];
@@ -2412,14 +2481,14 @@ const discoveredCatalogKeys = new Set<string>();
 let serverHarvestCursor = 0;
 let serverHarvestInFlight: Promise<void> | null = null;
 
-async function harvestServerDiscoveryBatch(): Promise<void> {
+async function harvestServerDiscoveryBatch(clientExcludeSet?: Set<string>): Promise<void> {
   if (serverHarvestInFlight) return serverHarvestInFlight;
   serverHarvestInFlight = (async () => {
     try {
       const seedIdx = serverHarvestCursor++;
       const seed = SERVER_PERPETUAL_SEEDS[seedIdx % SERVER_PERPETUAL_SEEDS.length];
       const round = Math.floor(seedIdx / SERVER_PERPETUAL_SEEDS.length);
-      const offset = (round % 12) * 15;
+      const offset = (round % 10) * 20;
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5000);
@@ -2427,7 +2496,7 @@ async function harvestServerDiscoveryBatch(): Promise<void> {
       try {
         const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(
           seed.artist
-        )}&media=music&entity=song&limit=18&offset=${offset}`;
+        )}&media=music&entity=song&limit=25&offset=${offset}`;
         const itRes = await fetch(itunesUrl, {
           headers: { 'User-Agent': 'SanctuaryPulseChristianMusic/1.0' },
           signal: controller.signal,
@@ -2440,11 +2509,11 @@ async function harvestServerDiscoveryBatch(): Promise<void> {
         clearTimeout(timer);
       }
 
-      // Also check YouTube rich catalog for newer / unreleased YouTube-only drops
-      if (items.length < 4) {
-        const ytItems = await searchYouTubeRichCatalog(
-          `${seed.artist} ${round > 0 ? 'official audio' : ''}`.trim()
-        );
+      // Also check YouTube rich catalog on deeper rounds or sparse iTunes pages
+      if (items.length < 6 || round >= 1) {
+        const ytModifiers = ['', 'official audio', 'album version', 'deluxe', 'new release', 'christian'];
+        const ytMod = ytModifiers[round % ytModifiers.length];
+        const ytItems = await searchYouTubeRichCatalog(`${seed.artist} ${ytMod}`.trim());
         for (const y of ytItems) {
           items.push({
             trackId: `yt-${y.videoId}`,
@@ -2489,6 +2558,23 @@ async function harvestServerDiscoveryBatch(): Promise<void> {
         const cKey = `${cleanArtist.toLowerCase()}__${normalizeSearchToken(cleanTitle)}`;
         if (discoveredCatalogKeys.has(cKey)) continue;
 
+        // Skip tracks the client ALREADY has before wasting verification budget!
+        const aTok = normalizeMatchTokens(seed.artist);
+        const aSearchTok = normalizeSearchToken(seed.artist);
+        const tTok = normalizeSearchToken(cleanTitle);
+        const tTok2 = normalizeMatchTokens(cleanTitle);
+        if (
+          clientExcludeSet &&
+          (clientExcludeSet.has(`${aTok}::${tTok}`) ||
+            clientExcludeSet.has(`${aTok}::${tTok2}`) ||
+            clientExcludeSet.has(`${aSearchTok}::${tTok}`) ||
+            clientExcludeSet.has(`${tTok}::${aTok}`) ||
+            clientExcludeSet.has(`${tTok2}::${aTok}`) ||
+            clientExcludeSet.has(`${tTok}::${aSearchTok}`))
+        ) {
+          continue;
+        }
+
         const durSec = Math.round((item.trackTimeMillis || 0) / 1000);
         if (durSec > 0 && (durSec < 100 || durSec > 480)) continue;
 
@@ -2506,11 +2592,11 @@ async function harvestServerDiscoveryBatch(): Promise<void> {
         });
       }
 
-      // Verify candidates strictly against SoundCloud official vocal + duration-locked LRC (in fast parallel mini-batches)
+      // Verify unseen candidates in parallel mini-batches
       let addedThisRound = 0;
-      const topCands = filteredCandidates.slice(0, process.env.VERCEL ? 6 : 10);
-      for (let i = 0; i < topCands.length && addedThisRound < 4; i += 3) {
-        const chunk = topCands.slice(i, i + 3);
+      const topCands = filteredCandidates.slice(0, process.env.VERCEL ? 8 : 14);
+      for (let i = 0; i < topCands.length && addedThisRound < 6; i += 4) {
+        const chunk = topCands.slice(i, i + 4);
         const verResults = await Promise.all(
           chunk.map(async (cand) => ({
             cand,
@@ -2518,7 +2604,7 @@ async function harvestServerDiscoveryBatch(): Promise<void> {
           }))
         );
         for (const { cand, ver } of verResults) {
-          if (addedThisRound >= 4) break;
+          if (addedThisRound >= 6) break;
           if (!ver.verified) continue;
           const cKey = `${cand.artist.toLowerCase()}__${normalizeSearchToken(ver.matchedTitle)}`;
           if (discoveredCatalogKeys.has(cKey)) continue;
@@ -2548,7 +2634,7 @@ async function harvestServerDiscoveryBatch(): Promise<void> {
   return serverHarvestInFlight;
 }
 
-// Perpetual Verified Christian Release Feed (never stalls, strictly SoundCloud vocal + synced-LRC verified)
+// Perpetual Verified Christian Release Feed (never stalls, scales past 1,000+ & forever)
 async function handleDiscoverNext(req: any, res: any) {
   const rawLimit = req.method === 'POST' ? req.body?.limit : req.query.limit;
   const limit = Math.min(12, Math.max(1, Number(rawLimit || 4)));
@@ -2612,16 +2698,16 @@ async function handleDiscoverNext(req: any, res: any) {
 
   const unseen = () => discoveredCatalogPool.filter((t) => !isExcluded(t));
 
-  // If pool has fewer unseen tracks than requested, run fast harvest cycles (bounded tightly on serverless)
-  const maxAttempts = process.env.VERCEL ? 2 : 4;
+  // Run fast harvest cycles skipping already-excluded client tracks so new releases never stop at ~300
+  const maxAttempts = process.env.VERCEL ? 3 : 6;
   for (let attempts = 0; attempts < maxAttempts && unseen().length < limit; attempts++) {
-    await harvestServerDiscoveryBatch();
+    await harvestServerDiscoveryBatch(excludeSet);
   }
 
   const batch = unseen().slice(0, limit);
   // Proactively warm next harvest cycle in background on persistent servers
-  if (!process.env.VERCEL && unseen().length < limit + 8) {
-    void harvestServerDiscoveryBatch().catch(() => {});
+  if (!process.env.VERCEL && unseen().length < limit + 12) {
+    void harvestServerDiscoveryBatch(excludeSet).catch(() => {});
   }
 
   res.json({
@@ -2682,12 +2768,12 @@ async function startServer() {
       }
     })();
 
-    // Keep background discovery pool continuously stocked for installed PWAs
+    // Keep background discovery pool continuously stocked well past 300 songs (supports 2,500+ in-memory)
     setInterval(() => {
-      if (discoveredCatalogPool.length < 400 && !serverHarvestInFlight) {
+      if (discoveredCatalogPool.length < 2500 && !serverHarvestInFlight) {
         void harvestServerDiscoveryBatch().catch(() => {});
       }
-    }, 25000);
+    }, 22000);
   });
 }
 

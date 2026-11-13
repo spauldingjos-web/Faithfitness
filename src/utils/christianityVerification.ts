@@ -879,13 +879,28 @@ export function verifyChristianTrack(params: {
     }
   }
 
-  // 6. Strictly require the artist to match our Curated Official Christian Artist Database!
+  // 6. Match Curated Official Christian Artist Database OR Official Christian / Gospel platform genre tag
   const matchedArtist = matchVerifiedChristianArtist(artist);
   if (matchedArtist) {
     return {
       isVerifiedChristian: true,
       verificationTag: 'Verified Christian Artist',
       matchedArtist,
+    };
+  }
+
+  const gNorm = normalizeText(genreName);
+  const isOfficialChristianGenre =
+    !params.requireKnownArtist &&
+    artistNorm.length >= 2 &&
+    /\b(christian|christian & gospel|gospel|ccm|praise & worship|worship|contemporary christian|afro-gospel|verified christian)\b/i.test(
+      gNorm
+    );
+  if (isOfficialChristianGenre) {
+    return {
+      isVerifiedChristian: true,
+      verificationTag: 'Verified Christian Genre',
+      matchedArtist: artist.trim(),
     };
   }
 
