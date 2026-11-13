@@ -21,6 +21,729 @@ import { Track, Playlist, COVER_ROCK_ALTAR } from '../data/musicCatalog';
 import { getSongSectionAtTime } from '../utils/audioEngine';
 import { downloadTrackToDevice } from '../utils/offlineVault';
 
+export interface TimedLyricLine {
+  timeSec: number;
+  text: string;
+}
+
+const clientLyricsCache = new Map<string, TimedLyricLine[]>();
+const clientAudioLockedSet = new Set<string>();
+const inFlightClientLyricFetches = new Map<string, Promise<TimedLyricLine[]>>();
+
+function parseLrcClient(lrc: string): TimedLyricLine[] {
+  const lines = lrc.split('\n');
+  const out: TimedLyricLine[] = [];
+  const timeRegex = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]/g;
+
+  for (const rawLine of lines) {
+    const matches = [...rawLine.matchAll(timeRegex)];
+    if (matches.length === 0) continue;
+    const text = rawLine.replace(timeRegex, '').trim();
+    if (!text) continue;
+    for (const m of matches) {
+      const mins = parseInt(m[1], 10);
+      const secs = parseInt(m[2], 10);
+      const ms = m[3] ? parseInt(m[3].padEnd(3, '0'), 10) : 0;
+      out.push({
+        timeSec: mins * 60 + secs + ms / 1000,
+        text,
+      });
+    }
+  }
+  return out.sort((a, b) => a.timeSec - b.timeSec);
+}
+
+function extractCanonicalClientTrack(
+  rawArtist: string,
+  rawTitle: string
+): { cleanArtist: string; primaryArtist: string; cleanTitle: string } {
+  let artist = (rawArtist || '').trim();
+  let title = (rawTitle || '').trim();
+
+  artist = artist
+    .replace(/\s*-\s*Topic$/i, '')
+    .replace(/VEVO$/i, '')
+    .replace(/\bOfficial\b/gi, '')
+    .trim();
+
+  if (title.includes(' - ')) {
+    const [left, ...rest] = title.split(' - ');
+    const right = rest.join(' - ').trim();
+    if (left && right) {
+      if (
+        !artist ||
+        artist.toLowerCase() === 'christian artist' ||
+        left.toLowerCase().includes(artist.toLowerCase().split(/\s+/)[0] || '')
+      ) {
+        if (!artist || artist.toLowerCase() === 'christian artist') {
+          artist = left.trim();
+        }
+        title = right;
+      }
+    }
+  }
+
+  title = title.split(/\s+[|¦]\s+|\s+\/\/\s+/)[0].trim();
+
+  title = title
+    .replace(
+      /\s*[\(\[][^)\]]*\b(official|lyric|lyrics|video|audio|visualizer|live|hd|hq|4k|remaster|remastered|version|edit|mix|cut|session|master|edition|sanctuary|calisthenics|devotional|unplugged|extended|feat|ft|featuring|with|prod|explicit|clean|single|album|deluxe|vol)\b[^)\]]*[\)\]]/gi,
+      ''
+    )
+    .replace(/\s*\b(feat\.?|ft\.?|featuring)\s+.*$/gi, '')
+    .replace(/\s*-\s*(official|lyric|lyrics|music\s+video|audio|live|remastered|visualizer).*$/gi, '')
+    .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  artist = artist
+    .replace(/\([^)]*\)/g, '')
+    .replace(/\[[^\]]*\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const primaryArtist =
+    artist.split(/\s*(?:,|&|\bfeat\.?\b|\bft\.?\b|\bwith\b|\bx\b|\/)\s*/i)[0]?.trim() || artist;
+
+  return {
+    cleanArtist: artist || 'Christian Artist',
+    primaryArtist: primaryArtist || artist || 'Christian Artist',
+    cleanTitle: title || rawTitle.trim(),
+  };
+}
+
+function normalizeClientToken(str: string): string {
+  return str
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(
+      /\b(feat|ft|featuring|official|video|audio|lyric|lyrics|version|edit|session|live|master|sanctuary|mix|cut|edition|remaster|remastered)\b.*$/gi,
+      ' '
+    )
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isMetadataPlaceholderLine(line: string): boolean {
+  const lower = line.toLowerCase().trim();
+  if (!lower || lower.length < 2) return true;
+  if (/^\[(ar|ti|al|by|offset|length|re|ve):/i.test(lower)) return true;
+  if (
+    /\b(full-length|master recording|master stream|bodyweight calisthenics|road bike|sanctuary connect|offline vault|sanctuary forever|universal index|24-bit|96khz|synced at \d+\s*bpm|anchored in)\b/i.test(
+      lower
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function sanitizeRealTimedLyrics(rawLines: TimedLyricLine[]): TimedLyricLine[] {
+  if (!Array.isArray(rawLines) || rawLines.length === 0) return [];
+  return rawLines
+    .filter(
+      (l) =>
+        l &&
+        typeof l.text === 'string' &&
+        Number.isFinite(l.timeSec) &&
+        l.timeSec >= 0 &&
+        !isMetadataPlaceholderLine(l.text)
+    )
+    .map((l) => ({
+      timeSec: Math.round(l.timeSec * 100) / 100,
+      text: l.text.replace(/^[\s♪♫]+|[\s♪♫]+$/g, '').trim(),
+    }))
+    .filter((l) => l.text.length > 0)
+    .sort((a, b) => a.timeSec - b.timeSec);
+}
+
+function buildSmartTimedLinesFromPlainClient(
+  plainLines: string[],
+  durationSec: number
+): TimedLyricLine[] {
+  const cleaned = plainLines
+    .map((l) => l.replace(/^\[.*?\]/g, '').trim())
+    .filter(
+      (l) =>
+        l.length > 1 &&
+        !isMetadataPlaceholderLine(l) &&
+        !/^(verse|chorus|bridge|intro|outro|pre-chorus|hook|interlude)\b/i.test(l)
+    );
+
+  if (cleaned.length === 0) return [];
+
+  const totalDur = Math.max(140, durationSec || 215);
+  const introOffset = Math.min(10, Math.max(4, totalDur * 0.04));
+  const vocalSpan = Math.max(60, totalDur - introOffset - 10);
+
+  const weights = cleaned.map((line) => {
+    const words = line.split(/\s+/).filter(Boolean).length;
+    return Math.max(2.2, Math.min(6.0, 1.4 + words * 0.38));
+  });
+  const totalWeight = weights.reduce((acc, w) => acc + w, 0) || 1;
+
+  let cursor = introOffset;
+  return cleaned.map((text, idx) => {
+    const lineTime = Math.round(cursor * 100) / 100;
+    const allocated = (weights[idx] / totalWeight) * vocalSpan;
+    cursor += allocated;
+    return {
+      timeSec: lineTime,
+      text,
+    };
+  });
+}
+
+export function buildFallbackTimedLyrics(track: Track, durationSec: number): TimedLyricLine[] {
+  const { cleanArtist, cleanTitle } = extractCanonicalClientTrack(track.artist, track.title);
+  const realSnippets = Array.isArray(track.lyricsSnippet)
+    ? track.lyricsSnippet.filter((s) => !isMetadataPlaceholderLine(s) && !s.includes(' — '))
+    : [];
+
+  if (realSnippets.length >= 4) {
+    return buildSmartTimedLinesFromPlainClient(realSnippets, durationSec || track.duration || 210);
+  }
+
+  return [
+    {
+      timeSec: 0,
+      text: `${cleanTitle} · ${cleanArtist}`,
+    },
+  ];
+}
+
+export function useTrackTimedLyrics(
+  track: Track,
+  duration: number,
+  enabled = true,
+  refreshTrigger = 0
+): TimedLyricLine[] {
+  const safeDur = Math.round(
+    Math.max(
+      95,
+      Number.isFinite(duration) && duration > 0
+        ? duration
+        : Number.isFinite(track.duration) && track.duration > 0
+          ? track.duration
+          : 210
+    )
+  );
+  const durationRef = useRef(safeDur);
+  durationRef.current = safeDur;
+
+  const { cleanArtist, primaryArtist, cleanTitle } = extractCanonicalClientTrack(
+    track.artist,
+    track.title
+  );
+  const searchTitle = normalizeClientToken(cleanTitle) || cleanTitle.toLowerCase();
+  const canonicalKey = `${primaryArtist.toLowerCase().trim()}__${searchTitle.toLowerCase().trim()}`;
+
+  const lastTrackIdRef = useRef(track.id);
+  const [timedLines, setTimedLines] = useState<TimedLyricLine[]>(() => {
+    return clientLyricsCache.get(canonicalKey) || clientLyricsCache.get(track.id) || [];
+  });
+
+  useEffect(() => {
+    if (!enabled) return;
+    let active = true;
+    const effectiveDuration = durationRef.current;
+
+    const exactCached = clientLyricsCache.get(canonicalKey) || clientLyricsCache.get(track.id);
+    const isAudioLocked = clientAudioLockedSet.has(canonicalKey) || clientAudioLockedSet.has(track.id);
+    if (refreshTrigger === 0 && isAudioLocked && exactCached && exactCached.length >= 6) {
+      if (lastTrackIdRef.current !== track.id || timedLines.length < 4) {
+        lastTrackIdRef.current = track.id;
+        setTimedLines(exactCached);
+      }
+      return;
+    }
+
+    if (lastTrackIdRef.current !== track.id) {
+      lastTrackIdRef.current = track.id;
+      setTimedLines(exactCached && exactCached.length >= 4 ? exactCached : []);
+    }
+
+    const artistPrimary =
+      primaryArtist
+        .toLowerCase()
+        .replace(/[^a-z0-9 ]/g, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length > 2)[0] || primaryArtist.toLowerCase();
+
+    const cacheSetBoth = (lines: TimedLyricLine[], locked = false) => {
+      clientLyricsCache.set(canonicalKey, lines);
+      clientLyricsCache.set(track.id, lines);
+      if (locked) {
+        clientAudioLockedSet.add(canonicalKey);
+        clientAudioLockedSet.add(track.id);
+      }
+    };
+
+    const dedupeKey = `${canonicalKey}__${refreshTrigger}`;
+    const existingPromise = inFlightClientLyricFetches.get(dedupeKey);
+    if (existingPromise) {
+      existingPromise.then((lines) => {
+        if (active && lines.length >= 4) {
+          setTimedLines(lines);
+        }
+      });
+      return () => {
+        active = false;
+      };
+    }
+
+    const fetchTask = (async (): Promise<TimedLyricLine[]> => {
+      let alreadyLockedWithTrueSync = false;
+      let bestSyncedSoFar: TimedLyricLine[] = [];
+
+      // 1. Fast canonical check against /api/music/lyrics
+      if (refreshTrigger === 0) {
+        try {
+          const res = await fetch(
+            `/api/music/lyrics?title=${encodeURIComponent(cleanTitle)}&artist=${encodeURIComponent(
+              cleanArtist
+            )}&duration=${effectiveDuration}&videoId=${encodeURIComponent(
+              track.youtubeVideoId || track.youtubeCandidates?.[0] || ''
+            )}`
+          );
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data?.synced) && data.synced.length >= 4) {
+              const sanitized = sanitizeRealTimedLyrics(data.synced);
+              if (sanitized.length >= 4) {
+                bestSyncedSoFar = sanitized;
+                const isExact = Boolean(data?.hasTrueLrcTimestamps && sanitized.length >= 6);
+                cacheSetBoth(sanitized, Boolean(data?.audioLocked && isExact));
+                if (data?.audioLocked && (isExact || data?.aiAudioSynced)) {
+                  alreadyLockedWithTrueSync = true;
+                  return sanitized;
+                }
+              }
+            }
+          }
+        } catch {
+          // continue to AI audio listener
+        }
+      }
+
+      // 2. Verify with AI Audio Lyric Listener ONLY if studio-lrc isn't already exact+locked (or user clicked Resync)
+      if (!alreadyLockedWithTrueSync || refreshTrigger > 0) {
+        try {
+          const aiRes = await fetch(
+            `/api/music/ai-listen-lyrics?title=${encodeURIComponent(
+              cleanTitle
+            )}&artist=${encodeURIComponent(cleanArtist)}${refreshTrigger > 0 ? '&force=1' : ''}`
+          );
+          if (aiRes.ok) {
+            const aiData = await aiRes.json();
+            if (Array.isArray(aiData?.synced) && aiData.synced.length >= 4) {
+              const aiSanitized = sanitizeRealTimedLyrics(aiData.synced);
+              if (aiSanitized.length >= 4) {
+                const isTrue = Boolean(aiData?.hasTrueLrcTimestamps || aiData?.aiAudioSynced);
+                cacheSetBoth(aiSanitized, Boolean(aiData?.audioLocked && isTrue));
+                return aiSanitized;
+              }
+            }
+          }
+        } catch {
+          // fall through if offline
+        }
+      }
+
+      if (bestSyncedSoFar.length >= 4) {
+        return bestSyncedSoFar;
+      }
+
+      // 3. Direct browser fallback to LRCLIB API (ONLY exact artist+title queries, never artist-less queries)
+      try {
+        const urls = [
+          `https://lrclib.net/api/search?track_name=${encodeURIComponent(
+            cleanTitle
+          )}&artist_name=${encodeURIComponent(primaryArtist)}`,
+          `https://lrclib.net/api/search?q=${encodeURIComponent(`${primaryArtist} ${cleanTitle}`)}`,
+        ];
+
+        const allItems: any[] = [];
+        for (const u of urls) {
+          try {
+            const r = await fetch(u);
+            if (r.ok) {
+              const arr = await r.json();
+              if (Array.isArray(arr) && arr.length > 0) {
+                allItems.push(...arr);
+                if (allItems.some((it) => it?.syncedLyrics)) break;
+              }
+            }
+          } catch {
+            // continue
+          }
+        }
+
+        const valid = allItems.filter((it: any) => {
+          if (!it?.syncedLyrics) return false;
+          const rawT = String(it.trackName || it.name || '');
+          const rawA = String(it.albumName || '');
+          const lyricSample = String(it.plainLyrics || it.syncedLyrics || '');
+
+          if (
+            /\b(cover|karaoke|tribute|instrumental|backing track|click track|performance track|pista|playback|remix|rmx|lofi|lo-fi|acoustic|lullaby|piano|guitar|orchestra|symphony|espanol|en español|tumbas|jardines|poder)\b/i.test(
+              `${rawT} ${rawA}`
+            )
+          ) {
+            return false;
+          }
+          if (!/\blive\b/i.test(cleanTitle) && /\b(live|live at|live from|unplugged)\b/i.test(rawT)) {
+            return false;
+          }
+          if (/[а-яА-ЯёЁáéíóúñ¿¡]/i.test(lyricSample)) return false;
+
+          const tName = ` ${normalizeClientToken(rawT)} `;
+          const aName = ` ${normalizeClientToken(String(it.artistName || ''))} `;
+          const pArt = normalizeClientToken(primaryArtist);
+          const stopWords = new Set(['the', 'a', 'an', 'and', 'of', 'to', 'in', 'on', 'for', 'my']);
+          const sigTitleWords = searchTitle.split(/\s+/).filter((w) => w.length > 0 && !stopWords.has(w));
+          const checkWords = sigTitleWords.length > 0 ? sigTitleWords : searchTitle.split(/\s+/).filter(Boolean);
+
+          const matchesTitle =
+            tName.includes(` ${searchTitle} `) ||
+            checkWords.every((w) => tName.includes(` ${w} `));
+          const matchesArtist =
+            (pArt.length > 1 && (aName.includes(` ${pArt} `) || ` ${pArt} `.includes(aName.trim()))) ||
+            (artistPrimary.length > 2 && aName.includes(` ${artistPrimary} `));
+
+          const d = Number(it.duration || 0);
+          const durOk = !d || Math.abs(d - effectiveDuration) <= 10;
+
+          return matchesTitle && matchesArtist && durOk;
+        });
+
+        valid.sort((a: any, b: any) => {
+          const score = (it: any) => {
+            let s = it.syncedLyrics ? 190 : 0;
+            const tName = normalizeClientToken(String(it.trackName || it.name || ''));
+            const aName = String(it.artistName || '').toLowerCase();
+            if (tName === searchTitle) s += 120;
+            if (aName.includes(artistPrimary)) s += 70;
+            const d = Number(it.duration || 0);
+            if (d > 0) {
+              const diff = Math.abs(d - effectiveDuration);
+              if (diff <= 3) s += 300;
+              else if (diff <= 8) s += 180;
+              else s -= 150;
+            }
+            return s;
+          };
+          return score(b) - score(a);
+        });
+
+        const best = valid[0];
+        if (best?.syncedLyrics) {
+          const parsed = sanitizeRealTimedLyrics(parseLrcClient(String(best.syncedLyrics)));
+          if (parsed.length >= 6) {
+            cacheSetBoth(parsed, true);
+            return parsed;
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      const existing = clientLyricsCache.get(canonicalKey) || clientLyricsCache.get(track.id);
+      if (existing && existing.length >= 4) {
+        return existing;
+      }
+
+      return buildFallbackTimedLyrics(track, effectiveDuration);
+    })();
+
+    inFlightClientLyricFetches.set(dedupeKey, fetchTask);
+    fetchTask
+      .then((lines) => {
+        if (active && lines.length > 0) {
+          setTimedLines(lines);
+        }
+      })
+      .finally(() => {
+        inFlightClientLyricFetches.delete(dedupeKey);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [track.id, track.title, track.artist, enabled, refreshTrigger, canonicalKey, cleanTitle, cleanArtist, primaryArtist]);
+
+  return timedLines;
+}
+
+/**
+ * Pure Boxless Kinetic Lyric-Video Renderer:
+ * Words pop up, bounce, and glide upward continuously in front of the live video with ZERO banner or box behind them.
+ * Keeps 100% real studio LRC timestamps untouched and shows an animated boxless intro/instrumental countdown before vocals enter.
+ */
+export const KineticLyricVideoStage: React.FC<{
+  timedLyrics: TimedLyricLine[];
+  currentTime: number;
+  duration: number;
+  isPlaying?: boolean;
+  compact?: boolean;
+  onSeek?: (sec: number) => void;
+}> = ({ timedLyrics, currentTime, duration, compact = false, onSeek }) => {
+  const heavyTextOutline: React.CSSProperties = {
+    textShadow:
+      '0 4px 18px rgba(0,0,0,0.98), 0 2px 5px rgba(0,0,0,0.98), 0 -1px 4px rgba(0,0,0,0.95), 0 0 30px rgba(0,0,0,0.9)',
+  };
+
+  const activeWordGlowOutline: React.CSSProperties = {
+    textShadow:
+      '0 6px 24px rgba(0,0,0,0.99), 0 2px 6px rgba(0,0,0,0.99), 0 0 28px rgba(16,185,129,0.95)',
+  };
+
+  const safeTime = Number.isFinite(currentTime) && currentTime >= 0 ? currentTime : 0;
+
+  // Loading state while fetching real synced lyrics
+  if (!timedLyrics || timedLyrics.length === 0) {
+    return (
+      <div className="w-full flex flex-col items-center justify-center text-center select-none pointer-events-none px-4 py-3">
+        <div
+          style={heavyTextOutline}
+          className="text-base sm:text-2xl font-black text-emerald-300 tracking-wide animate-pulse"
+        >
+          ♪ Syncing Official Song Lyrics...
+        </div>
+      </div>
+    );
+  }
+
+  const firstVocalSec = timedLyrics[0].timeSec;
+
+  // Instrumental Intro state: before the singer's first lyric timestamp (e.g., 0:00 -> firstVocalSec)
+  // Renders a lively boxless countdown + previews the opening lyric lines so timestamps stay 100% accurate!
+  if (safeTime < firstVocalSec && timedLyrics.length >= 2) {
+    const secsUntilVocal = Math.max(1, Math.ceil(firstVocalSec - safeTime));
+    const introProgress = firstVocalSec > 0 ? Math.max(0, Math.min(1, safeTime / firstVocalSec)) : 0;
+    const introGlidePx = Math.round((0.5 - introProgress) * (compact ? 10 : 20) * 10) / 10;
+    const beatPulse = Math.floor(safeTime * 2.5) % 3;
+
+    return (
+      <div
+        style={{
+          transform: `translate3d(0, ${introGlidePx}px, 0)`,
+          willChange: 'transform',
+        }}
+        className="w-full flex flex-col items-center justify-center text-center select-none pointer-events-none px-2 sm:px-6 space-y-2.5 sm:space-y-4"
+      >
+        <div
+          style={activeWordGlowOutline}
+          className={`font-black text-emerald-300 tracking-wide ${
+            compact ? 'text-xs sm:text-sm' : 'text-sm sm:text-xl'
+          }`}
+        >
+          ♪ Instrumental Intro · Vocal enters in {secsUntilVocal}s{' '}
+          <span className="inline-block ml-1 tracking-widest">
+            {beatPulse === 0 ? '● ○ ○' : beatPulse === 1 ? '● ● ○' : '● ● ●'}
+          </span>
+        </div>
+
+        {/* Opening Line Preview (Ready to Pop as soon as vocalist enters) */}
+        <div
+          onClick={() => onSeek && onSeek(timedLyrics[0].timeSec)}
+          style={{
+            ...heavyTextOutline,
+            opacity: Math.min(0.96, 0.55 + introProgress * 0.41),
+          }}
+          className={`pointer-events-auto font-black text-white cursor-pointer max-w-4xl ${
+            compact
+              ? 'text-lg sm:text-2xl'
+              : 'text-2xl sm:text-4xl md:text-5xl tracking-tight'
+          }`}
+        >
+          {timedLyrics[0].text}
+        </div>
+
+        {timedLyrics[1] && (
+          <div
+            onClick={() => onSeek && onSeek(timedLyrics[1].timeSec)}
+            style={{
+              ...heavyTextOutline,
+              opacity: 0.45,
+            }}
+            className={`pointer-events-auto font-extrabold text-white/80 cursor-pointer max-w-3xl ${
+              compact ? 'text-xs sm:text-sm line-clamp-1' : 'text-sm sm:text-2xl line-clamp-1'
+            }`}
+          >
+            {timedLyrics[1].text}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Find active line index based on exact currentTime
+  let activeIndex = 0;
+  for (let i = 0; i < timedLyrics.length; i++) {
+    if (safeTime >= timedLyrics[i].timeSec) {
+      activeIndex = i;
+    } else {
+      break;
+    }
+  }
+
+  const activeLine = timedLyrics[activeIndex];
+  const nextLineTime =
+    timedLyrics[activeIndex + 1]?.timeSec ?? Math.max(activeLine.timeSec + 4.0, duration || 210);
+  const totalGap = Math.max(0.8, nextLineTime - activeLine.timeSec);
+  // Cap the word-by-word sing-along window to a natural vocal phrase duration (max 6.5s)
+  // so during a 15s guitar solo after a line, the words finish at normal speed instead of dragging slowly
+  const vocalPhraseWindow = Math.min(totalGap, Math.max(1.8, activeLine.text.split(/\s+/).length * 0.48));
+  const rawVocalProgress = (safeTime - activeLine.timeSec) / vocalPhraseWindow;
+  const lineProgress = Math.max(0, Math.min(1, rawVocalProgress));
+  const gapProgress = Math.max(0, Math.min(1, (safeTime - activeLine.timeSec) / totalGap));
+
+  const isInInstrumentalBreak =
+    totalGap >= 9.0 && safeTime - activeLine.timeSec > vocalPhraseWindow + 1.2 && nextLineTime > safeTime;
+  const secsUntilNextVocal = Math.max(1, Math.ceil(nextLineTime - safeTime));
+
+  const words = activeLine.text.split(/\s+/).filter(Boolean);
+  const exactWordFloat = lineProgress * words.length;
+  const activeWordIndex = Math.min(words.length - 1, Math.floor(exactWordFloat));
+  const wordSubProgress = exactWordFloat - Math.floor(exactWordFloat);
+
+  const prevLine2 = activeIndex >= 2 ? timedLyrics[activeIndex - 2] : null;
+  const prevLine1 = activeIndex >= 1 ? timedLyrics[activeIndex - 1] : null;
+  const nextLine1 = timedLyrics[activeIndex + 1] || null;
+  const nextLine2 = timedLyrics[activeIndex + 2] || null;
+
+  // Continuous upward lyric-video glide
+  const verticalGlidePx = Math.round((0.5 - gapProgress) * (compact ? 12 : 24) * 10) / 10;
+
+  return (
+    <div
+      style={{
+        transform: `translate3d(0, ${verticalGlidePx}px, 0)`,
+        willChange: 'transform',
+      }}
+      className="w-full flex flex-col items-center justify-center text-center select-none pointer-events-none px-2 sm:px-6 space-y-2 sm:space-y-3.5"
+    >
+      {/* Previous Line -2 (Rising & Fading Out at Top) */}
+      {!compact && prevLine2 && (
+        <div
+          onClick={() => onSeek && onSeek(prevLine2.timeSec)}
+          style={{
+            ...heavyTextOutline,
+            opacity: Math.max(0.1, 0.38 - gapProgress * 0.28),
+          }}
+          className="pointer-events-auto text-xs sm:text-lg font-extrabold text-white -translate-y-2 scale-90 cursor-pointer truncate max-w-2xl"
+        >
+          {prevLine2.text}
+        </div>
+      )}
+
+      {/* Previous Line -1 (Floating Above Active Line) */}
+      {prevLine1 && (
+        <div
+          onClick={() => onSeek && onSeek(prevLine1.timeSec)}
+          style={{
+            ...heavyTextOutline,
+            opacity: Math.max(0.28, 0.68 - gapProgress * 0.3),
+          }}
+          className={`pointer-events-auto font-extrabold text-white -translate-y-1 scale-95 cursor-pointer max-w-3xl ${
+            compact ? 'text-xs sm:text-sm line-clamp-1' : 'text-sm sm:text-2xl line-clamp-1'
+          }`}
+        >
+          {prevLine1.text}
+        </div>
+      )}
+
+      {/* CURRENT ACTIVE LINE: Word-by-Word Pop-Up & Bounce Animation Directly Over Video (Zero Box/Banner!) */}
+      <div
+        key={activeIndex}
+        className={`flex flex-wrap items-center justify-center gap-x-2 sm:gap-x-3.5 gap-y-1.5 max-w-4xl py-1 ${
+          compact
+            ? 'text-lg sm:text-2xl font-black'
+            : 'text-2xl sm:text-4xl md:text-5xl font-black tracking-tight'
+        }`}
+      >
+        {words.map((word, wIdx) => {
+          const isCurrentWord = wIdx === activeWordIndex && lineProgress < 1;
+          const isPastWord = wIdx < activeWordIndex || lineProgress >= 1;
+          const bounceY = isCurrentWord
+            ? -Math.sin(wordSubProgress * Math.PI) * 9 - 4
+            : isPastWord
+              ? -2
+              : 2;
+          const wordScale = isCurrentWord
+            ? 1.14 + Math.sin(wordSubProgress * Math.PI) * 0.08
+            : isPastWord
+              ? 1.02
+              : 0.94;
+
+          return (
+            <span
+              key={`${activeIndex}-${wIdx}`}
+              style={{
+                ...(isCurrentWord ? activeWordGlowOutline : heavyTextOutline),
+                transform: `translate3d(0, ${bounceY.toFixed(1)}px, 0) scale(${wordScale.toFixed(3)})`,
+                transition: 'color 120ms ease, transform 90ms linear',
+              }}
+              className={`inline-block ${
+                isCurrentWord
+                  ? 'text-emerald-300'
+                  : isPastWord
+                    ? 'text-white'
+                    : 'text-white/70'
+              }`}
+            >
+              {word}
+            </span>
+          );
+        })}
+      </div>
+
+      {/* Mid-Song Instrumental Solo / Bridge Countdown (if there is a long instrumental break > 9s) */}
+      {isInInstrumentalBreak && (
+        <div
+          style={activeWordGlowOutline}
+          className="text-xs sm:text-base font-black text-emerald-300 tracking-wide animate-pulse"
+        >
+          ♪ Instrumental Break · Next vocal in {secsUntilNextVocal}s
+        </div>
+      )}
+
+      {/* Upcoming Line +1 (Rising Into View From Below) */}
+      {nextLine1 && (
+        <div
+          onClick={() => onSeek && onSeek(nextLine1.timeSec)}
+          style={{
+            ...heavyTextOutline,
+            opacity: Math.min(0.92, 0.5 + gapProgress * 0.42),
+          }}
+          className={`pointer-events-auto font-extrabold text-white translate-y-1 scale-95 cursor-pointer max-w-3xl ${
+            compact ? 'text-xs sm:text-sm line-clamp-1' : 'text-sm sm:text-2xl line-clamp-1'
+          }`}
+        >
+          {nextLine1.text}
+        </div>
+      )}
+
+      {/* Upcoming Line +2 */}
+      {!compact && nextLine2 && (
+        <div
+          onClick={() => onSeek && onSeek(nextLine2.timeSec)}
+          style={{
+            ...heavyTextOutline,
+            opacity: Math.min(0.55, 0.2 + gapProgress * 0.32),
+          }}
+          className="pointer-events-auto text-xs sm:text-lg font-extrabold text-white translate-y-2 scale-90 cursor-pointer truncate max-w-2xl"
+        >
+          {nextLine2.text}
+        </div>
+      )}
+    </div>
+  );
+};
+
 interface TrackVideoCanvasProps {
   track: Track;
   isPlaying: boolean;
@@ -29,6 +752,8 @@ interface TrackVideoCanvasProps {
   spectrum?: number[];
   mode?: 'card' | 'player' | 'fullscreen' | 'mini';
   showOfficialVideoEmbed?: boolean;
+  showLyricsOverlay?: boolean;
+  onToggleLyricsOverlay?: () => void;
   className?: string;
 }
 
@@ -37,28 +762,33 @@ interface TrackVideoCanvasProps {
  * Combines 60fps beat-reactive stage lighting, kinetic lyrics, and muted YouTube official video visual stream
  * so the 100% full-length audio from /api/music/full-song plays completely uninterrupted.
  */
+const EMPTY_SPECTRUM: number[] = [];
+
 export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
   track,
   isPlaying,
   currentTime = 0,
   duration = 210,
-  spectrum = [],
+  spectrum = EMPTY_SPECTRUM,
   mode = 'card',
   showOfficialVideoEmbed = false,
+  showLyricsOverlay = true,
+  onToggleLyricsOverlay,
   className = '',
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [resolvedYoutubeId, setResolvedYoutubeId] = useState<string | null>(
-    track.youtubeVideoId || (track.youtubeCandidates && track.youtubeCandidates[0]) || null
-  );
+  const spectrumRef = useRef<number[]>(spectrum);
+  spectrumRef.current = spectrum;
+
+  const firstCandidate =
+    track.youtubeVideoId || (track.youtubeCandidates && track.youtubeCandidates[0]) || null;
+  const [resolvedYoutubeId, setResolvedYoutubeId] = useState<string | null>(firstCandidate);
 
   useEffect(() => {
     let active = true;
-    const initialId =
-      track.youtubeVideoId || (track.youtubeCandidates && track.youtubeCandidates[0]) || null;
-    setResolvedYoutubeId(initialId);
+    setResolvedYoutubeId((prev) => (prev === firstCandidate ? prev : firstCandidate));
 
-    if (!initialId) {
+    if (!firstCandidate) {
       fetch(
         `/api/music/resolve?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`
       )
@@ -76,7 +806,7 @@ export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
     return () => {
       active = false;
     };
-  }, [track.id, track.title, track.artist, track.youtubeVideoId, track.youtubeCandidates]);
+  }, [track.id, track.title, track.artist, firstCandidate]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -120,9 +850,10 @@ export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
 
+      const liveSpec = spectrumRef.current;
       const avgSpec =
-        spectrum.length > 0
-          ? spectrum.reduce((acc, v) => acc + v, 0) / spectrum.length
+        liveSpec.length > 0
+          ? liveSpec.reduce((acc, v) => acc + v, 0) / liveSpec.length
           : isPlaying
             ? 48 + Math.sin(frame * 0.15) * 26
             : 20;
@@ -189,7 +920,7 @@ export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
         const barWidth = w / bars;
         for (let i = 0; i < bars; i++) {
           const specVal =
-            spectrum[i % Math.max(1, spectrum.length)] ??
+            liveSpec[i % Math.max(1, liveSpec.length)] ??
             (isPlaying ? 32 + Math.sin(frame * 0.2 + i * 0.45) * 26 : 12);
           const barH = Math.max(6, (specVal / 100) * (h * 0.24));
           ctx.fillStyle = i % 2 === 0 ? palette.primary : palette.secondary;
@@ -204,14 +935,9 @@ export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
 
     animId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animId);
-  }, [track.id, track.genre, isPlaying, spectrum, mode]);
+  }, [track.id, track.genre, isPlaying, mode]);
 
-  const activeLyricIndex =
-    track.lyricsSnippet.length > 0
-      ? Math.floor((currentTime / Math.max(1, duration)) * track.lyricsSnippet.length) %
-        track.lyricsSnippet.length
-      : 0;
-  const activeSection = getSongSectionAtTime(currentTime, duration);
+  const timedLyrics = useTrackTimedLyrics(track, duration, mode === 'player' && showLyricsOverlay);
 
   const isAbsoluteOrFixed =
     className.includes('absolute') || className.includes('fixed') || mode === 'fullscreen';
@@ -275,20 +1001,35 @@ export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
         style={{ width: '100%', height: '100%' }}
       />
 
-      {/* Center / Lower-Third Live Kinetic Lyric & Section Overlay on Player */}
+      {/* Center Live Kinetic Lyric Video Overlay on Player (Zero Banner Box!) */}
       {mode === 'player' && (
-        <div className="absolute inset-x-4 bottom-5 z-10 pointer-events-none flex flex-col items-center text-center space-y-2">
-          <div className="px-3 py-1 rounded-full bg-black/75 border border-emerald-500/40 backdrop-blur-md text-[10px] font-mono uppercase tracking-wider text-emerald-400 flex items-center gap-1.5 shadow-lg">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-            <span>
-              {showOfficialVideoEmbed ? 'FULL-SCREEN MUSIC VIDEO + FULL SONG' : 'SPOTIFY VIDEO CANVAS'} ·{' '}
-              {activeSection}
-            </span>
+        <div className="absolute inset-x-3 inset-y-3 z-10 pointer-events-none flex flex-col items-center justify-between text-center">
+          <div className="w-full flex items-center justify-end">
+            {onToggleLyricsOverlay && (
+              <button
+                type="button"
+                onClick={onToggleLyricsOverlay}
+                className={`pointer-events-auto px-3 py-1 rounded-xl text-xs font-extrabold border transition-all cursor-pointer shadow-lg ${
+                  showLyricsOverlay
+                    ? 'bg-emerald-500 text-slate-950 border-emerald-300'
+                    : 'bg-black/80 text-white border-white/25 hover:bg-white/20'
+                }`}
+              >
+                {showLyricsOverlay ? 'No Lyrics' : 'Show Lyrics'}
+              </button>
+            )}
           </div>
-          {track.lyricsSnippet[activeLyricIndex] && (
-            <p className="text-sm sm:text-base font-extrabold text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.95)] line-clamp-2 max-w-md px-3.5 py-2 rounded-2xl bg-black/55 backdrop-blur-md border border-white/10">
-              “{track.lyricsSnippet[activeLyricIndex]}”
-            </p>
+
+          {showLyricsOverlay && (
+            <div className="my-auto w-full">
+              <KineticLyricVideoStage
+                timedLyrics={timedLyrics}
+                currentTime={currentTime}
+                duration={duration}
+                isPlaying={isPlaying}
+                compact={true}
+              />
+            </div>
           )}
         </div>
       )}
@@ -557,6 +1298,25 @@ export const FullScreenVideoFeedModal: React.FC<FullScreenVideoFeedModalProps> =
   const touchStartY = useRef<number | null>(null);
   const touchStartX = useRef<number | null>(null);
   const lastSwipeTime = useRef<number>(0);
+  const [showLyrics, setShowLyrics] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('sanctuary_fullscreen_lyrics') !== 'off';
+    } catch {
+      return true;
+    }
+  });
+
+  const toggleLyrics = useCallback(() => {
+    setShowLyrics((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('sanctuary_fullscreen_lyrics', next ? 'on' : 'off');
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }, []);
 
   const handleTouchStart = (e: React.TouchEvent) => {
     const t = e.touches[0];
@@ -607,6 +1367,33 @@ export const FullScreenVideoFeedModal: React.FC<FullScreenVideoFeedModalProps> =
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onNext, onPrev, onClose, onTogglePlay]);
 
+  const [lyricOffsetSec, setLyricOffsetSec] = useState(0);
+  const [aiResyncCount, setAiResyncCount] = useState(0);
+  const [isAiResyncing, setIsAiResyncing] = useState(false);
+
+  // Reset manual offset when track changes
+  useEffect(() => {
+    setLyricOffsetSec(0);
+    setAiResyncCount(0);
+    setIsAiResyncing(false);
+  }, [currentTrack.id]);
+
+  const timedLyrics = useTrackTimedLyrics(
+    currentTrack,
+    duration,
+    isOpen && showLyrics,
+    aiResyncCount
+  );
+
+  const handleForceAiAudioSync = useCallback(() => {
+    setIsAiResyncing(true);
+    setLyricOffsetSec(0);
+    setAiResyncCount((prev) => prev + 1);
+    window.setTimeout(() => {
+      setIsAiResyncing(false);
+    }, 2800);
+  }, []);
+
   if (!isOpen) return null;
 
   const isLiked = likedTrackIds.includes(currentTrack.id);
@@ -615,25 +1402,20 @@ export const FullScreenVideoFeedModal: React.FC<FullScreenVideoFeedModalProps> =
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   };
 
-  const activeLyricIndex =
-    currentTrack.lyricsSnippet.length > 0
-      ? Math.floor(
-          (currentTime / Math.max(1, duration)) * currentTrack.lyricsSnippet.length
-        ) % currentTrack.lyricsSnippet.length
-      : 0;
   const activeSection = getSongSectionAtTime(currentTime, duration);
+  const syncedCurrentTime = Math.max(0, currentTime + lyricOffsetSec);
 
   return (
     <div
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
-      className="fixed inset-x-0 top-0 bottom-[62px] md:bottom-0 z-50 bg-black overflow-hidden select-none"
+      className="fixed inset-x-0 top-0 bottom-[62px] md:bottom-0 z-[65] bg-black overflow-hidden select-none flex flex-col"
     >
       {/* Full-Viewport Video Canvas + Official Music Video Background */}
       <TrackVideoCanvas
         track={currentTrack}
         isPlaying={isPlaying}
-        currentTime={currentTime}
+        currentTime={syncedCurrentTime}
         duration={duration}
         spectrum={spectrum}
         mode="fullscreen"
@@ -641,111 +1423,190 @@ export const FullScreenVideoFeedModal: React.FC<FullScreenVideoFeedModalProps> =
         className="absolute inset-0 w-full h-full"
       />
 
-      {/* Full-Screen Interactive Overlay Layout */}
-      <div className="relative z-20 w-full h-full flex flex-col justify-between p-4 sm:p-6 pointer-events-none">
-        {/* Top Bar: Minimal with prominent X at the top to exit */}
-        <div className="flex items-center justify-between w-full pointer-events-auto">
-          <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/15 text-white text-xs font-semibold shadow-lg">
-            <span className="truncate max-w-[180px] sm:max-w-md font-bold">{currentTrack.title}</span>
+      {/* Full-Screen Interactive Overlay Layout: flex-col with min-h-0 middle stage so bottom controls NEVER get pushed off-screen */}
+      <div className="relative z-20 w-full h-full flex flex-col justify-between p-2.5 sm:p-5 pointer-events-none overflow-hidden">
+        {/* Top Bar: Track Pill + AI Audio Listener Button + Lyric Sync Nudge (-0.5s / +0.5s) + 'No Lyrics / Show Lyrics' Toggle + Exit X */}
+        <div className="flex items-center justify-between gap-2 w-full pointer-events-auto shrink-0">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/70 backdrop-blur-md border border-white/15 text-white text-xs font-semibold shadow-lg min-w-0">
+            <span className="truncate max-w-[100px] sm:max-w-md font-bold">{currentTrack.title}</span>
             <span className="text-slate-400">·</span>
-            <span className="text-slate-300 truncate max-w-[140px]">{currentTrack.artist}</span>
+            <span className="text-slate-300 truncate max-w-[80px] sm:max-w-[150px]">{currentTrack.artist}</span>
           </div>
 
-          <button
-            onClick={onClose}
-            className="w-12 h-12 rounded-full bg-black/70 hover:bg-white/20 text-white flex items-center justify-center border border-white/25 cursor-pointer backdrop-blur-md transition-all active:scale-95 shadow-2xl shrink-0"
-            aria-label="Exit full screen"
-            title="Exit Full Screen"
-          >
-            <X className="w-6 h-6 stroke-[2.5]" />
-          </button>
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {showLyrics && (
+              <button
+                type="button"
+                onClick={handleForceAiAudioSync}
+                className="min-h-[34px] sm:min-h-[38px] px-2.5 sm:px-3 rounded-full bg-black/80 hover:bg-emerald-500/25 border border-emerald-400/50 text-emerald-300 font-extrabold text-[11px] sm:text-xs flex items-center gap-1.5 cursor-pointer backdrop-blur-md shadow-lg"
+                title="AI Audio Listener: Have AI listen to this song's audio stream and lock exact lyric timing"
+              >
+                <span className={`w-2 h-2 rounded-full bg-emerald-400 ${isAiResyncing ? 'animate-ping' : ''}`} />
+                <span>{isAiResyncing ? 'AI Hearing Audio...' : 'AI Audio Sync ✓'}</span>
+              </button>
+            )}
+
+            {showLyrics && (
+              <div className="hidden sm:flex items-center gap-1 bg-black/75 border border-white/20 rounded-full px-2 py-1 backdrop-blur-md">
+                <button
+                  type="button"
+                  onClick={() => setLyricOffsetSec((prev) => Math.round((prev - 0.5) * 10) / 10)}
+                  className="px-2 py-0.5 rounded-full bg-white/10 hover:bg-white/25 text-[11px] font-mono font-bold text-white cursor-pointer"
+                  title="Lyrics earlier (-0.5s)"
+                >
+                  -0.5s
+                </button>
+                {lyricOffsetSec !== 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setLyricOffsetSec(0)}
+                    className="text-[10px] font-mono text-emerald-400 px-1 cursor-pointer"
+                    title="Reset lyric sync offset"
+                  >
+                    {lyricOffsetSec > 0 ? `+${lyricOffsetSec}s` : `${lyricOffsetSec}s`}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setLyricOffsetSec((prev) => Math.round((prev + 0.5) * 10) / 10)}
+                  className="px-2 py-0.5 rounded-full bg-white/10 hover:bg-white/25 text-[11px] font-mono font-bold text-white cursor-pointer"
+                  title="Lyrics later (+0.5s)"
+                >
+                  +0.5s
+                </button>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={toggleLyrics}
+              className={`min-h-[38px] sm:min-h-[42px] px-3.5 sm:px-4 rounded-full font-extrabold text-xs sm:text-sm flex items-center gap-1.5 border transition-all cursor-pointer shadow-xl ${
+                showLyrics
+                  ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 border-emerald-300'
+                  : 'bg-black/80 hover:bg-white/20 text-white border-white/30'
+              }`}
+              title={showLyrics ? 'Click to hide lyrics (No Lyrics)' : 'Click to show big lyrics on video'}
+            >
+              <span>{showLyrics ? 'No Lyrics' : 'Show Lyrics'}</span>
+            </button>
+
+            <button
+              onClick={onClose}
+              className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-black/80 hover:bg-white/20 text-white flex items-center justify-center border border-white/25 cursor-pointer backdrop-blur-md transition-all active:scale-95 shadow-2xl shrink-0"
+              aria-label="Exit full screen"
+              title="Exit Full Screen"
+            >
+              <X className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
+            </button>
+          </div>
         </div>
 
-        {/* Middle Stage: Center Lyric Display + Right-Hand Action Rail */}
-        <div className="flex-1 flex items-center justify-between gap-4 my-2">
-          {/* Center Synchronized Lyric Callout */}
-          <div className="flex-1 flex flex-col items-center justify-center text-center px-2 sm:px-10 pointer-events-none">
-            <div className="px-3 py-1 rounded-full bg-black/65 border border-emerald-500/40 text-xs font-mono text-emerald-400 mb-3">
-              {activeSection} · {currentTrack.scriptureReference} · {currentTrack.bpm} BPM
-            </div>
-            {currentTrack.lyricsSnippet[activeLyricIndex] && (
-              <div className="text-lg sm:text-3xl font-extrabold text-white drop-shadow-[0_4px_20px_rgba(0,0,0,0.95)] max-w-2xl px-5 py-3 rounded-3xl bg-black/45 backdrop-blur-md border border-white/15">
-                “{currentTrack.lyricsSnippet[activeLyricIndex]}”
-              </div>
+        {/* Middle Stage: Pure Boxless Kinetic Lyric Video Floating Directly Over the Video (Zero Banner!) */}
+        <div className="flex-1 min-h-0 flex items-center justify-between gap-2 sm:gap-4 my-1 overflow-hidden">
+          <div className="flex-1 min-w-0 flex flex-col items-center justify-center text-center pointer-events-none">
+            {showLyrics && (
+              <KineticLyricVideoStage
+                timedLyrics={timedLyrics}
+                currentTime={syncedCurrentTime}
+                duration={duration}
+                isPlaying={isPlaying}
+                onSeek={onSeek}
+              />
             )}
           </div>
 
-          {/* Right Side Floating Action Rail: Like ♥, + Playlist, Share, Download to Phone, Ringtone */}
-          <div className="flex flex-col items-center gap-3.5 shrink-0 pointer-events-auto">
+          {/* Right Side Floating Action Rail: Compact on mobile so it never overflows vertically */}
+          <div className="flex flex-col items-center gap-1.5 sm:gap-3 shrink-0 pointer-events-auto py-1">
             <button
               onClick={() => onToggleLike(currentTrack.id)}
-              className="flex flex-col items-center gap-1 cursor-pointer"
+              className="flex flex-col items-center gap-0.5 cursor-pointer"
               title="Like Song ♥"
             >
               <div
-                className={`w-12 h-12 rounded-2xl flex items-center justify-center border transition-all shadow-xl ${
+                className={`w-9 h-9 sm:w-11 sm:h-11 rounded-xl sm:rounded-2xl flex items-center justify-center border transition-all shadow-xl ${
                   isLiked
                     ? 'bg-emerald-500 border-emerald-300 text-slate-950 scale-105'
-                    : 'bg-black/70 border-white/25 text-white hover:bg-emerald-500 hover:text-slate-950'
+                    : 'bg-black/75 border-white/25 text-white hover:bg-emerald-500 hover:text-slate-950'
                 }`}
               >
-                <Heart className={`w-5 h-5 ${isLiked ? 'fill-current' : ''}`} />
+                <Heart className={`w-4 h-4 sm:w-5 sm:h-5 ${isLiked ? 'fill-current' : ''}`} />
               </div>
-              <span className="text-xs font-extrabold text-white drop-shadow">
-                {isLiked ? 'Liked ♥' : 'Like'}
+              <span className="text-[10px] sm:text-xs font-extrabold text-white drop-shadow">
+                {isLiked ? 'Liked' : 'Like'}
               </span>
             </button>
 
             <button
               onClick={() => onOpenAddToPlaylist(currentTrack)}
-              className="flex flex-col items-center gap-1 cursor-pointer"
+              className="flex flex-col items-center gap-0.5 cursor-pointer"
               title="Add to Playlist"
             >
-              <div className="w-12 h-12 rounded-2xl bg-black/70 hover:bg-amber-500 hover:text-slate-950 border border-white/25 text-white flex items-center justify-center transition-all shadow-xl">
-                <ListPlus className="w-5 h-5" />
+              <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl sm:rounded-2xl bg-black/75 hover:bg-amber-500 hover:text-slate-950 border border-white/25 text-white flex items-center justify-center transition-all shadow-xl">
+                <ListPlus className="w-4 h-4 sm:w-5 sm:h-5" />
               </div>
-              <span className="text-xs font-extrabold text-white drop-shadow">Playlist</span>
+              <span className="text-[10px] sm:text-xs font-extrabold text-white drop-shadow">Playlist</span>
             </button>
 
             <button
               onClick={() => downloadTrackToDevice(currentTrack)}
-              className="flex flex-col items-center gap-1 cursor-pointer"
+              className="flex flex-col items-center gap-0.5 cursor-pointer"
               title="Download to Phone (iOS / Android)"
             >
-              <div className="w-12 h-12 rounded-2xl bg-black/70 hover:bg-emerald-500 hover:text-slate-950 border border-white/25 text-emerald-400 hover:text-slate-950 flex items-center justify-center transition-all shadow-xl">
-                <Download className="w-5 h-5" />
+              <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl sm:rounded-2xl bg-black/75 hover:bg-emerald-500 hover:text-slate-950 border border-white/25 text-emerald-400 hover:text-slate-950 flex items-center justify-center transition-all shadow-xl">
+                <Download className="w-4 h-4 sm:w-5 sm:h-5" />
               </div>
-              <span className="text-xs font-extrabold text-white drop-shadow">Download</span>
+              <span className="text-[10px] sm:text-xs font-extrabold text-white drop-shadow">Save</span>
             </button>
 
             <button
               onClick={() => onShareTrack(currentTrack)}
-              className="flex flex-col items-center gap-1 cursor-pointer"
+              className="flex flex-col items-center gap-0.5 cursor-pointer"
               title="Share Song"
             >
-              <div className="w-12 h-12 rounded-2xl bg-black/70 hover:bg-emerald-500 hover:text-slate-950 border border-white/25 text-white flex items-center justify-center transition-all shadow-xl">
-                <Share2 className="w-5 h-5" />
+              <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl sm:rounded-2xl bg-black/75 hover:bg-emerald-500 hover:text-slate-950 border border-white/25 text-white flex items-center justify-center transition-all shadow-xl">
+                <Share2 className="w-4 h-4 sm:w-5 sm:h-5" />
               </div>
-              <span className="text-xs font-extrabold text-white drop-shadow">Share</span>
+              <span className="text-[10px] sm:text-xs font-extrabold text-white drop-shadow">Share</span>
             </button>
 
             <button
               onClick={() => onOpenRingtoneStudio(currentTrack)}
-              className="flex flex-col items-center gap-1 cursor-pointer"
+              className="hidden sm:flex flex-col items-center gap-0.5 cursor-pointer"
               title="Add to Ringtones"
             >
-              <div className="w-12 h-12 rounded-2xl bg-black/70 hover:bg-amber-500 hover:text-slate-950 border border-white/25 text-amber-400 flex items-center justify-center transition-all shadow-xl">
-                <BellRing className="w-5 h-5" />
+              <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl sm:rounded-2xl bg-black/75 hover:bg-amber-500 hover:text-slate-950 border border-white/25 text-amber-400 flex items-center justify-center transition-all shadow-xl">
+                <BellRing className="w-4 h-4 sm:w-5 sm:h-5" />
               </div>
-              <span className="text-xs font-extrabold text-white drop-shadow">Ringtone</span>
+              <span className="text-[10px] sm:text-xs font-extrabold text-white drop-shadow">Ringtone</span>
             </button>
           </div>
         </div>
 
-        {/* Bottom Full-Width Player Dock + Quick Video Track Switcher */}
-        <div className="bg-black/75 backdrop-blur-xl border border-white/15 rounded-3xl p-4 sm:p-5 space-y-3 max-w-4xl w-full mx-auto pointer-events-auto">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
+        {/* Bottom Full-Width Player Dock: shrink-0 so Scrubber, Rewind, Play/Pause, Fast-Forward are ALWAYS 100% visible */}
+        <div className="shrink-0 bg-black/85 backdrop-blur-xl border border-white/20 rounded-2xl sm:rounded-3xl p-3 sm:p-4 space-y-2 sm:space-y-3 max-w-4xl w-full mx-auto pointer-events-auto shadow-2xl">
+          {/* 1. Prominent Interactive Slide Bar (Scrubber) FIRST so it is never cut off */}
+          <div className="space-y-1">
+            <input
+              type="range"
+              min={0}
+              max={duration || 220}
+              value={currentTime}
+              onChange={(e) => onSeek(Number(e.target.value))}
+              className="w-full accent-emerald-400 h-2.5 bg-white/25 rounded-lg cursor-pointer"
+              aria-label="Seek song position"
+            />
+            <div className="flex items-center justify-between text-[11px] sm:text-xs font-mono text-slate-200">
+              <span>{formatTime(currentTime)}</span>
+              <span className="text-emerald-400 font-bold truncate px-2">
+                {currentTrack.title} · {activeSection}
+              </span>
+              <span>{formatTime(duration)}</span>
+            </div>
+          </div>
+
+          {/* 2. Transport Controls Row: Go Back (-15s), Prev Track, Play/Pause, Next Track, Fast Forward (+15s) */}
+          <div className="flex items-center justify-between gap-2">
+            <div className="hidden sm:flex items-center gap-2.5 min-w-0 flex-1">
               <img
                 src={currentTrack.coverUrl}
                 alt={currentTrack.title}
@@ -753,34 +1614,38 @@ export const FullScreenVideoFeedModal: React.FC<FullScreenVideoFeedModalProps> =
                 onError={(e) => {
                   (e.currentTarget as HTMLImageElement).src = COVER_ROCK_ALTAR;
                 }}
-                className="w-12 h-12 rounded-xl object-cover border border-white/20 shrink-0"
+                className="w-10 h-10 rounded-xl object-cover border border-white/20 shrink-0"
               />
               <div className="min-w-0">
-                <div className="text-base sm:text-lg font-extrabold text-white truncate">
+                <div className="text-sm font-extrabold text-white truncate">
                   {currentTrack.title}
                 </div>
-                <div className="text-xs sm:text-sm text-slate-300 truncate mt-0.5">
-                  <span>{currentTrack.artist}</span>
-                  <span aria-hidden="true" className="mx-1.5">·</span>
-                  <span>{currentTrack.genreLabel}</span>
-                  <span aria-hidden="true" className="mx-1.5">·</span>
-                  <span className="text-emerald-400 font-mono">{formatTime(duration)}</span>
+                <div className="text-xs text-slate-300 truncate">
+                  {currentTrack.artist} · {currentTrack.genreLabel}
                 </div>
               </div>
             </div>
 
-            {/* Transport Controls */}
-            <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center gap-2 sm:gap-3 w-full sm:w-auto">
               <button
                 onClick={onPrev}
-                className="w-11 h-11 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center cursor-pointer"
+                className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center cursor-pointer transition-colors"
                 title="Previous Song"
               >
-                <SkipBack className="w-5 h-5 fill-current" />
+                <SkipBack className="w-4 h-4 sm:w-5 sm:h-5 fill-current" />
               </button>
+
+              <button
+                onClick={() => onSeek(Math.max(0, currentTime - 15))}
+                className="px-2.5 h-10 sm:h-11 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs font-mono font-bold flex items-center justify-center cursor-pointer transition-colors"
+                title="Go Back 15 Seconds"
+              >
+                -15s
+              </button>
+
               <button
                 onClick={onTogglePlay}
-                className="w-14 h-14 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center shadow-xl cursor-pointer"
+                className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center shadow-xl cursor-pointer transition-transform active:scale-95 shrink-0"
                 title={isPlaying ? 'Pause' : 'Play'}
               >
                 {isPlaying ? (
@@ -789,41 +1654,34 @@ export const FullScreenVideoFeedModal: React.FC<FullScreenVideoFeedModalProps> =
                   <Play className="w-6 h-6 fill-current ml-0.5" />
                 )}
               </button>
+
+              <button
+                onClick={() => onSeek(Math.min(duration || 220, currentTime + 15))}
+                className="px-2.5 h-10 sm:h-11 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs font-mono font-bold flex items-center justify-center cursor-pointer transition-colors"
+                title="Fast Forward 15 Seconds"
+              >
+                +15s
+              </button>
+
               <button
                 onClick={onNext}
-                className="w-11 h-11 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center cursor-pointer"
+                className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center cursor-pointer transition-colors"
                 title="Next Song"
               >
-                <SkipForward className="w-5 h-5 fill-current" />
+                <SkipForward className="w-4 h-4 sm:w-5 sm:h-5 fill-current" />
               </button>
             </div>
           </div>
 
-          {/* Full-Song Scrubber */}
-          <div className="space-y-1">
-            <input
-              type="range"
-              min={0}
-              max={duration || 220}
-              value={currentTime}
-              onChange={(e) => onSeek(Number(e.target.value))}
-              className="w-full accent-emerald-500 h-2 bg-white/20 rounded-lg cursor-pointer"
-            />
-            <div className="flex justify-between text-xs font-mono text-slate-300">
-              <span>{formatTime(currentTime)}</span>
-              <span>{formatTime(duration)}</span>
-            </div>
-          </div>
-
-          {/* Horizontal Quick Switcher for Next Videos */}
-          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pt-1">
+          {/* 3. Horizontal Quick Switcher for Next Videos */}
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-0.5">
             {tracks.slice(0, 12).map((t) => {
               const active = t.id === currentTrack.id;
               return (
                 <button
                   key={t.id}
                   onClick={() => onSelectTrack(t)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 shrink-0 cursor-pointer border transition-all ${
+                  className={`px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1.5 shrink-0 cursor-pointer border transition-all ${
                     active
                       ? 'bg-emerald-500 text-slate-950 border-emerald-400'
                       : 'bg-white/10 hover:bg-white/20 text-white border-white/10'
@@ -836,9 +1694,9 @@ export const FullScreenVideoFeedModal: React.FC<FullScreenVideoFeedModalProps> =
                     onError={(e) => {
                       (e.currentTarget as HTMLImageElement).src = COVER_ROCK_ALTAR;
                     }}
-                    className="w-5 h-5 rounded object-cover"
+                    className="w-4 h-4 rounded object-cover"
                   />
-                  <span className="max-w-[120px] truncate">{t.title}</span>
+                  <span className="max-w-[105px] truncate">{t.title}</span>
                 </button>
               );
             })}

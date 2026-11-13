@@ -1,5 +1,5 @@
-const CACHE_NAME = 'sanctuary-pulse-v7';
-const AUDIO_CACHE_NAME = 'sanctuary-audio-vault-v7';
+const CACHE_NAME = 'sanctuary-pulse-v11';
+const AUDIO_CACHE_NAME = 'sanctuary-audio-vault-v11';
 
 const APP_SHELL = [
   '/',

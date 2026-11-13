@@ -1,9 +1,10 @@
 import { Playlist, Track, INITIAL_PLAYLISTS, INITIAL_TRACKS } from '../data/musicCatalog';
 
 const DB_NAME = 'SanctuaryOfflineVaultDB';
-const DB_VERSION = 2;
+const DB_VERSION = 8;
 const STORE_TRACKS = 'offline_tracks';
 const STORE_AUDIO_BLOBS = 'offline_audio_blobs';
+const MIN_FULL_SONG_BYTES = 850000; // Full-length songs are > 850KB (prevents 30s clips from caching)
 
 export interface UserCloudState {
   bookmarkedTrackIds: string[];
@@ -26,13 +27,13 @@ export function loadPersistedState(): UserCloudState {
     if (raw) {
       const parsed = JSON.parse(raw);
       return {
-        bookmarkedTrackIds: parsed.bookmarkedTrackIds || ['trk-skillet-1', 'trk-tobymac-1', 'trk-lecrae-1'],
+        bookmarkedTrackIds: parsed.bookmarkedTrackIds || ['trk-skillet-1', 'trk-cory-1', 'trk-lecrae-1'],
         offlineTrackIds: parsed.offlineTrackIds || [
           'trk-skillet-1',
-          'trk-tobymac-1',
+          'trk-cory-1',
           'trk-lecrae-1',
-          'trk-brandon-lake-1',
-          'trk-fokc-1',
+          'trk-tobymac-1',
+          'trk-demon-hunter-1',
         ],
         completedCalisthenicsDays: parsed.completedCalisthenicsDays || [1, 2, 3],
         activeCalisthenicsDay: parsed.activeCalisthenicsDay || 4,
@@ -48,13 +49,13 @@ export function loadPersistedState(): UserCloudState {
     // ignore
   }
   return {
-    bookmarkedTrackIds: ['trk-skillet-1', 'trk-tobymac-1', 'trk-lecrae-1'],
+    bookmarkedTrackIds: ['trk-skillet-1', 'trk-cory-1', 'trk-lecrae-1'],
     offlineTrackIds: [
       'trk-skillet-1',
-      'trk-tobymac-1',
+      'trk-cory-1',
       'trk-lecrae-1',
-      'trk-brandon-lake-1',
-      'trk-fokc-1',
+      'trk-tobymac-1',
+      'trk-demon-hunter-1',
     ],
     completedCalisthenicsDays: [1, 2, 3],
     activeCalisthenicsDay: 4,
@@ -78,14 +79,15 @@ export function savePersistedState(state: UserCloudState): void {
 function openVaultDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = (event) => {
+    req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE_TRACKS)) {
         db.createObjectStore(STORE_TRACKS, { keyPath: 'id' });
       }
-      if (!db.objectStoreNames.contains(STORE_AUDIO_BLOBS)) {
-        db.createObjectStore(STORE_AUDIO_BLOBS, { keyPath: 'id' });
+      if (db.objectStoreNames.contains(STORE_AUDIO_BLOBS)) {
+        db.deleteObjectStore(STORE_AUDIO_BLOBS);
       }
+      db.createObjectStore(STORE_AUDIO_BLOBS, { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -101,14 +103,20 @@ export function getCachedBlobUrlSync(trackId: string): string | null {
 export async function preloadOfflineBlobUrls(): Promise<void> {
   try {
     const db = await openVaultDB();
-    const tx = db.transaction(STORE_AUDIO_BLOBS, 'readonly');
-    const req = tx.objectStore(STORE_AUDIO_BLOBS).getAll();
+    const tx = db.transaction(STORE_AUDIO_BLOBS, 'readwrite');
+    const store = tx.objectStore(STORE_AUDIO_BLOBS);
+    const req = store.getAll();
     req.onsuccess = () => {
       const items = (req.result as { id: string; blob: Blob }[]) || [];
       items.forEach((item) => {
-        if (item?.id && item?.blob instanceof Blob && item.blob.size > 1000) {
-          if (!memoryBlobUrlMap.has(item.id)) {
-            memoryBlobUrlMap.set(item.id, URL.createObjectURL(item.blob));
+        if (item?.id && item?.blob instanceof Blob) {
+          if (item.blob.size >= MIN_FULL_SONG_BYTES) {
+            if (!memoryBlobUrlMap.has(item.id)) {
+              memoryBlobUrlMap.set(item.id, URL.createObjectURL(item.blob));
+            }
+          } else {
+            // Purge any old 30-second preview blob automatically
+            store.delete(item.id);
           }
         }
       });
@@ -120,16 +128,15 @@ export async function preloadOfflineBlobUrls(): Promise<void> {
 
 export async function saveTrackAudioBlob(trackId: string, blob: Blob): Promise<void> {
   try {
-    if (blob && blob.size > 1000) {
-      memoryBlobUrlMap.set(trackId, URL.createObjectURL(blob));
-    }
+    if (!blob || blob.size < MIN_FULL_SONG_BYTES) return;
+    memoryBlobUrlMap.set(trackId, URL.createObjectURL(blob));
     const db = await openVaultDB();
     const tx = db.transaction(STORE_AUDIO_BLOBS, 'readwrite');
     tx.objectStore(STORE_AUDIO_BLOBS).put({
       id: trackId,
       blob,
       sizeBytes: blob.size,
-      mimeType: blob.type || 'audio/mp4',
+      mimeType: blob.type || 'audio/mpeg',
       cachedAt: new Date().toISOString(),
     });
   } catch {
@@ -144,8 +151,12 @@ export async function getTrackAudioBlob(trackId: string): Promise<Blob | null> {
       const tx = db.transaction(STORE_AUDIO_BLOBS, 'readonly');
       const req = tx.objectStore(STORE_AUDIO_BLOBS).get(trackId);
       req.onsuccess = () => {
-        if (req.result && req.result.blob instanceof Blob) {
-          if (!memoryBlobUrlMap.has(trackId) && req.result.blob.size > 1000) {
+        if (
+          req.result &&
+          req.result.blob instanceof Blob &&
+          req.result.blob.size >= MIN_FULL_SONG_BYTES
+        ) {
+          if (!memoryBlobUrlMap.has(trackId)) {
             memoryBlobUrlMap.set(trackId, URL.createObjectURL(req.result.blob));
           }
           resolve(req.result.blob);
@@ -164,7 +175,7 @@ export async function isTrackAudioCached(trackId: string): Promise<boolean> {
   if (memoryBlobUrlMap.has(trackId)) return true;
   try {
     const blob = await getTrackAudioBlob(trackId);
-    return blob !== null && blob.size > 1000;
+    return blob !== null && blob.size >= MIN_FULL_SONG_BYTES;
   } catch {
     return false;
   }
@@ -176,34 +187,62 @@ export async function resolveDirectItunesAudioUrl(track: Track): Promise<string 
   if (directStreamUrlMemory.has(track.id)) {
     return directStreamUrlMemory.get(track.id)!;
   }
-  const cleanTitle = track.title.replace(/\([^)]*\)/g, '').trim() || track.title;
-  const queries = [`${track.artist} ${cleanTitle}`, `${track.artist} Christian`, track.artist];
+  const cleanTitle = track.title.replace(/\([^)]*\)/g, '').replace(/\[[^\]]*\]/g, '').trim() || track.title;
+  const primaryArtist =
+    track.artist.split(/\s*(?:,|&|\bfeat\.?\b|\bft\.?\b|\bwith\b|\bx\b|\/)\s*/i)[0]?.trim() ||
+    track.artist;
 
-  for (const q of queries) {
-    try {
-      const res = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(
-          q
-        )}&media=music&entity=song&limit=8`
-      );
-      if (!res.ok) continue;
-      const data = await res.json();
-      const results = Array.isArray(data?.results) ? data.results : [];
-      const match = results.find(
-        (r: any) =>
-          r?.previewUrl &&
-          !String(`${r.trackName || ''} ${r.artistName || ''}`)
-            .toLowerCase()
-            .match(/\b(cover|karaoke|tribute|instrumental)\b/)
-      ) || results.find((r: any) => r?.previewUrl);
+  const norm = (s: string) =>
+    (s || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
 
-      if (match?.previewUrl) {
-        directStreamUrlMemory.set(track.id, match.previewUrl);
-        return match.previewUrl;
+  const targetTitleWords = norm(cleanTitle)
+    .split(' ')
+    .filter((w) => w.length > 0 && !['the', 'a', 'an', 'and', 'of', 'to', 'in', 'on', 'for', 'my'].includes(w));
+  const checkTitleWords = targetTitleWords.length > 0 ? targetTitleWords : norm(cleanTitle).split(' ').filter(Boolean);
+  const normArtist = norm(primaryArtist);
+
+  try {
+    const res = await fetch(
+      `https://itunes.apple.com/search?term=${encodeURIComponent(
+        `${primaryArtist} ${cleanTitle}`
+      )}&media=music&entity=song&limit=10`
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const results = Array.isArray(data?.results) ? data.results : [];
+    const match = results.find((r: any) => {
+      if (!r?.previewUrl) return false;
+      if (r?.trackExplicitness === 'explicit' || r?.collectionExplicitness === 'explicit') return false;
+      const meta = `${r.trackName || ''} ${r.artistName || ''} ${r.collectionName || ''} ${r.primaryGenreName || ''}`.toLowerCase();
+      if (
+        /\b(cover|karaoke|tribute|instrumental|backing track|click track|performance track|pista|playback|remix|rmx|lofi|lo-fi|acoustic|lullaby|piano|guitar|orchestra|symphony|espanol|en español|tumbas|poder|made popular)\b/i.test(
+          meta
+        )
+      ) {
+        return false;
       }
-    } catch {
-      // ignore
+      if (!/\blive\b/i.test(track.title) && /\b(live|live at|live from)\b/i.test(r.trackName || '')) {
+        return false;
+      }
+      const rTitleNorm = ` ${norm(r.trackName || '')} `;
+      const rArtistNorm = ` ${norm(r.artistName || '')} `;
+      const titleOk = checkTitleWords.every((w) => rTitleNorm.includes(` ${w} `));
+      const artistOk = normArtist.length > 1 && rArtistNorm.includes(` ${normArtist} `);
+      return titleOk && artistOk;
+    });
+
+    if (match?.previewUrl) {
+      directStreamUrlMemory.set(track.id, match.previewUrl);
+      return match.previewUrl;
     }
+  } catch {
+    // ignore
   }
   return null;
 }
@@ -216,31 +255,14 @@ export async function fetchAndCacheTrackOffline(track: Track): Promise<boolean> 
     // 1. Save metadata
     await saveTrackToIndexedDB(track);
 
-    // 2. Try primary full-song stream first
+    // 2. Fetch full-length song stream (never cache 30-second clips into the full-song vault)
     const url = `/api/music/full-song?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}&id=${encodeURIComponent(track.id)}`;
-    try {
-      const response = await fetch(url);
-      if (response.ok) {
-        const contentType = response.headers.get('content-type') || '';
-        if (contentType.includes('audio') || contentType.includes('octet-stream')) {
-          const blob = await response.blob();
-          if (blob && blob.size > 10000) {
-            await saveTrackAudioBlob(track.id, blob);
-            return true;
-          }
-        }
-      }
-    } catch {
-      // fall through to direct CDN stream
-    }
-
-    // 3. Fallback to direct Apple Music CDN audio stream so caching works on static hosts too
-    const directUrl = await resolveDirectItunesAudioUrl(track);
-    if (directUrl) {
-      const resp = await fetch(directUrl);
-      if (resp.ok) {
-        const blob = await resp.blob();
-        if (blob && blob.size > 5000) {
+    const response = await fetch(url);
+    if (response.ok) {
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('audio') || contentType.includes('octet-stream')) {
+        const blob = await response.blob();
+        if (blob && blob.size >= MIN_FULL_SONG_BYTES) {
           await saveTrackAudioBlob(track.id, blob);
           return true;
         }

@@ -30,7 +30,7 @@ import {
 import { Track, Playlist, COVER_ROCK_ALTAR } from '../data/musicCatalog';
 import { SongSection, getSongSectionAtTime } from '../utils/audioEngine';
 import { downloadTrackToDevice } from '../utils/offlineVault';
-import { TrackVideoCanvas } from './SpotifyCanvasAndModals';
+import { TrackVideoCanvas, useTrackTimedLyrics } from './SpotifyCanvasAndModals';
 
 interface PlayerBarAndSheetProps {
   currentTrack: Track;
@@ -105,8 +105,14 @@ export const PlayerBarAndSheet: React.FC<PlayerBarAndSheetProps> = ({
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [visualMode, setVisualMode] = useState<'canvas' | 'video' | 'art'>('video');
+  const [showPlayerLyrics, setShowPlayerLyrics] = useState(true);
   const [drawerTab, setDrawerTab] = useState<'upnext' | 'lyrics' | 'playlists'>('upnext');
   const [addedPlaylistId, setAddedPlaylistId] = useState<string | null>(null);
+  const timedLyrics = useTrackTimedLyrics(
+    currentTrack,
+    duration,
+    isExpanded && drawerTab === 'lyrics'
+  );
 
   useEffect(() => {
     setIsExpanded(false);
@@ -173,6 +179,19 @@ export const PlayerBarAndSheet: React.FC<PlayerBarAndSheetProps> = ({
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                onClick={() => setShowPlayerLyrics((prev) => !prev)}
+                className={`min-h-[38px] px-3 rounded-xl font-extrabold text-xs flex items-center gap-1.5 cursor-pointer transition-colors ${
+                  showPlayerLyrics
+                    ? 'bg-amber-500 text-slate-950'
+                    : 'bg-white/15 hover:bg-white/25 text-white'
+                }`}
+                title={showPlayerLyrics ? 'Hide Lyrics on Video' : 'Show Lyrics on Video'}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>{showPlayerLyrics ? 'No Lyrics' : 'Lyrics'}</span>
+              </button>
+
               <button
                 onClick={() => {
                   setIsExpanded(false);
@@ -247,10 +266,10 @@ export const PlayerBarAndSheet: React.FC<PlayerBarAndSheetProps> = ({
           </div>
 
           {/* 2-Column Expanded Body */}
-          <div className="relative z-20 flex-1 overflow-y-auto p-4 sm:p-8 max-w-6xl w-full mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8 items-center">
-            <div className="lg:col-span-6 flex flex-col items-center text-center space-y-4 w-full">
-              {/* Large Full-Height Video / Canvas Stage (Explicit h-[320px] sm:h-[400px] w-full so it NEVER collapses!) */}
-              <div className="relative w-full max-w-lg h-[320px] sm:h-[400px] rounded-3xl overflow-hidden shadow-2xl border border-white/20 bg-slate-950">
+          <div className="relative z-20 flex-1 min-h-0 overflow-y-auto p-3 sm:p-6 max-w-6xl w-full mx-auto grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-center">
+            <div className="lg:col-span-6 flex flex-col items-center text-center space-y-2.5 sm:space-y-3.5 w-full">
+              {/* Responsive Video / Canvas Stage so Scrubber & Play/Fast-Forward buttons stay visible on screen */}
+              <div className="relative w-full max-w-lg h-[190px] sm:h-[270px] lg:h-[330px] rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl border border-white/20 bg-slate-950 shrink-0">
                 {visualMode === 'art' ? (
                   <img
                     src={currentTrack.coverUrl}
@@ -270,6 +289,8 @@ export const PlayerBarAndSheet: React.FC<PlayerBarAndSheetProps> = ({
                     spectrum={spectrum}
                     mode="player"
                     showOfficialVideoEmbed={visualMode === 'video'}
+                    showLyricsOverlay={showPlayerLyrics}
+                    onToggleLyricsOverlay={() => setShowPlayerLyrics((prev) => !prev)}
                     className="absolute inset-0 w-full h-full"
                   />
                 )}
@@ -279,23 +300,104 @@ export const PlayerBarAndSheet: React.FC<PlayerBarAndSheetProps> = ({
                     setIsExpanded(false);
                     onOpenFullScreenVideo();
                   }}
-                  className="absolute top-3 right-3 z-20 px-3 py-1.5 rounded-xl bg-black/75 hover:bg-emerald-500 text-white hover:text-slate-950 text-xs font-bold flex items-center gap-1.5 border border-white/20 cursor-pointer"
+                  className="absolute bottom-2.5 right-2.5 z-20 px-3 py-1.5 rounded-xl bg-black/75 hover:bg-emerald-500 text-white hover:text-slate-950 text-xs font-bold flex items-center gap-1.5 border border-white/20 cursor-pointer"
                 >
                   <Maximize2 className="w-3.5 h-3.5" />
                   <span>Full Screen Video</span>
                 </button>
               </div>
 
-              <div className="space-y-1 max-w-md">
-                <div className="text-xs text-emerald-400 font-semibold">
+              <div className="space-y-0.5 max-w-md">
+                <div className="text-[11px] sm:text-xs text-emerald-400 font-semibold">
                   {currentTrack.genreLabel} · {currentTrack.bpm} BPM · Full Song ({formatTime(duration)})
                 </div>
-                <h2 className="text-2xl font-extrabold text-white tracking-tight">
+                <h2 className="text-lg sm:text-2xl font-extrabold text-white tracking-tight truncate max-w-full">
                   {currentTrack.title}
                 </h2>
-                <p className="text-sm text-slate-300">
+                <p className="text-xs sm:text-sm text-slate-300 truncate">
                   {currentTrack.artist} · {currentTrack.album}
                 </p>
+              </div>
+
+              {/* Full-Song Scrubber (Slide Bar) Placed Right Above Transport Controls */}
+              <div className="w-full max-w-md space-y-1 bg-black/55 backdrop-blur-md border border-white/15 rounded-2xl p-3">
+                <input
+                  type="range"
+                  min={0}
+                  max={duration || 220}
+                  value={currentTime}
+                  onChange={(e) => onSeek(Number(e.target.value))}
+                  className="w-full accent-emerald-400 h-2.5 bg-white/25 rounded-lg cursor-pointer"
+                  aria-label="Seek song position"
+                />
+                <div className="flex justify-between text-xs font-mono text-slate-200">
+                  <span>{formatTime(currentTime)}</span>
+                  <span className="text-emerald-400 font-semibold">
+                    Full Song · {activeSection}
+                  </span>
+                  <span>{formatTime(duration)}</span>
+                </div>
+
+                {/* Main Transport Controls with -15s Go Back & +15s Fast Forward */}
+                <div className="flex items-center justify-center gap-2 sm:gap-3 pt-1">
+                  <button
+                    onClick={onToggleShuffle}
+                    className={`min-h-[38px] min-w-[38px] rounded-xl flex items-center justify-center cursor-pointer ${
+                      isShuffle ? 'text-amber-400' : 'text-slate-300 hover:text-white'
+                    }`}
+                    title="Shuffle"
+                  >
+                    <Shuffle className="w-4 h-4 sm:w-5 sm:h-5" />
+                  </button>
+                  <button
+                    onClick={onPrev}
+                    className="min-h-[40px] min-w-[40px] rounded-xl flex items-center justify-center text-white bg-white/10 hover:bg-white/20 cursor-pointer"
+                    title="Previous Song"
+                  >
+                    <SkipBack className="w-5 h-5 fill-current" />
+                  </button>
+                  <button
+                    onClick={() => onSeek(Math.max(0, currentTime - 15))}
+                    className="px-2.5 min-h-[40px] rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-mono font-bold flex items-center justify-center cursor-pointer"
+                    title="Go Back 15 Seconds"
+                  >
+                    -15s
+                  </button>
+                  <button
+                    onClick={onTogglePlay}
+                    className="w-14 h-14 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center shadow-lg transition-transform active:scale-95 cursor-pointer shrink-0"
+                    title={isPlaying ? 'Pause' : 'Play'}
+                  >
+                    {isPlaying ? (
+                      <Pause className="w-6 h-6 fill-current" />
+                    ) : (
+                      <Play className="w-6 h-6 fill-current ml-0.5" />
+                    )}
+                  </button>
+                  <button
+                    onClick={() => onSeek(Math.min(duration || 220, currentTime + 15))}
+                    className="px-2.5 min-h-[40px] rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-mono font-bold flex items-center justify-center cursor-pointer"
+                    title="Fast Forward 15 Seconds"
+                  >
+                    +15s
+                  </button>
+                  <button
+                    onClick={onNext}
+                    className="min-h-[40px] min-w-[40px] rounded-xl flex items-center justify-center text-white bg-white/10 hover:bg-white/20 cursor-pointer"
+                    title="Next Song"
+                  >
+                    <SkipForward className="w-5 h-5 fill-current" />
+                  </button>
+                  <button
+                    onClick={onToggleRepeat}
+                    className={`min-h-[38px] min-w-[38px] rounded-xl flex items-center justify-center cursor-pointer ${
+                      isRepeat ? 'text-amber-400' : 'text-slate-300 hover:text-white'
+                    }`}
+                    title="Repeat"
+                  >
+                    <Repeat className="w-4 h-4 sm:w-5 sm:h-5" />
+                  </button>
+                </div>
               </div>
 
               {/* Jump to Full Song Section Buttons */}
@@ -316,72 +418,6 @@ export const PlayerBarAndSheet: React.FC<PlayerBarAndSheetProps> = ({
                     </button>
                   );
                 })}
-              </div>
-
-              {/* Full-Song Scrubber */}
-              <div className="w-full max-w-md space-y-1.5">
-                <input
-                  type="range"
-                  min={0}
-                  max={duration || 220}
-                  value={currentTime}
-                  onChange={(e) => onSeek(Number(e.target.value))}
-                  className="w-full accent-emerald-500 h-2 bg-white/20 rounded-lg cursor-pointer"
-                />
-                <div className="flex justify-between text-xs font-mono text-slate-300">
-                  <span>{formatTime(currentTime)}</span>
-                  <span className="text-emerald-400 font-semibold">
-                    Full Song · {activeSection}
-                  </span>
-                  <span>{formatTime(duration)}</span>
-                </div>
-              </div>
-
-              {/* Main Transport Controls */}
-              <div className="flex items-center justify-center gap-4">
-                <button
-                  onClick={onToggleShuffle}
-                  className={`min-h-[44px] min-w-[44px] rounded-xl flex items-center justify-center cursor-pointer ${
-                    isShuffle ? 'text-amber-400' : 'text-slate-300 hover:text-white'
-                  }`}
-                  title="Shuffle"
-                >
-                  <Shuffle className="w-5 h-5" />
-                </button>
-                <button
-                  onClick={onPrev}
-                  className="min-h-[44px] min-w-[44px] rounded-xl flex items-center justify-center text-white hover:bg-white/10 cursor-pointer"
-                  title="Previous"
-                >
-                  <SkipBack className="w-6 h-6 fill-current" />
-                </button>
-                <button
-                  onClick={onTogglePlay}
-                  className="w-16 h-16 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center shadow-lg transition-transform active:scale-95 cursor-pointer"
-                  title={isPlaying ? 'Pause' : 'Play'}
-                >
-                  {isPlaying ? (
-                    <Pause className="w-7 h-7 fill-current" />
-                  ) : (
-                    <Play className="w-7 h-7 fill-current ml-0.5" />
-                  )}
-                </button>
-                <button
-                  onClick={onNext}
-                  className="min-h-[44px] min-w-[44px] rounded-xl flex items-center justify-center text-white hover:bg-white/10 cursor-pointer"
-                  title="Next"
-                >
-                  <SkipForward className="w-6 h-6 fill-current" />
-                </button>
-                <button
-                  onClick={onToggleRepeat}
-                  className={`min-h-[44px] min-w-[44px] rounded-xl flex items-center justify-center cursor-pointer ${
-                    isRepeat ? 'text-amber-400' : 'text-slate-300 hover:text-white'
-                  }`}
-                  title="Repeat"
-                >
-                  <Repeat className="w-5 h-5" />
-                </button>
               </div>
             </div>
 
@@ -496,26 +532,26 @@ export const PlayerBarAndSheet: React.FC<PlayerBarAndSheetProps> = ({
                   })}
 
                 {drawerTab === 'lyrics' && (
-                  <div className="space-y-4 p-2">
-                    <div className="rounded-xl bg-emerald-500/15 border border-emerald-500/30 p-3.5">
-                      <div className="text-xs font-bold text-emerald-400">
-                        Scripture Anchor · {currentTrack.scriptureReference}
-                      </div>
-                      <div className="text-xs text-slate-200 mt-1">
-                        Full Track ({formatTime(currentTrack.duration)}) · Now in {activeSection}
-                      </div>
-                    </div>
-
-                    <div className="space-y-3">
-                      {currentTrack.lyricsSnippet.map((line, i) => (
-                        <p
+                  <div className="space-y-2.5 p-2">
+                    {timedLyrics.map((line, i) => {
+                      const nextTime = timedLyrics[i + 1]?.timeSec ?? (duration || 220);
+                      const isCurrentLine =
+                        currentTime >= line.timeSec && currentTime < nextTime;
+                      return (
+                        <button
                           key={i}
-                          className="text-base sm:text-lg font-semibold text-white leading-relaxed"
+                          type="button"
+                          onClick={() => onSeek(line.timeSec)}
+                          className={`w-full text-left px-3 py-2 rounded-xl transition-all cursor-pointer block ${
+                            isCurrentLine
+                              ? 'text-lg sm:text-xl font-black text-emerald-400 scale-[1.01] bg-emerald-500/10'
+                              : 'text-sm sm:text-base font-bold text-white/60 hover:text-white'
+                          }`}
                         >
-                          {line}
-                        </p>
-                      ))}
-                    </div>
+                          {line.text}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
 

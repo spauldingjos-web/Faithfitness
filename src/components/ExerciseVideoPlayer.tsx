@@ -42,6 +42,9 @@ function detectMotionArchetype(ex: CalisthenicsExercise): MotionArchetype {
 export const ExerciseVideoPlayer: React.FC<ExerciseVideoPlayerProps> = ({ exercise }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const modalCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const lastPhaseRef = useRef('Concentric Drive');
+  const [isVisible, setIsVisible] = useState(true);
   const [isPlaying, setIsPlaying] = useState(true);
   const [speed, setSpeed] = useState<1 | 0.5>(1);
   const [cameraAngle, setCameraAngle] = useState<'side' | 'front'>('side');
@@ -51,14 +54,28 @@ export const ExerciseVideoPlayer: React.FC<ExerciseVideoPlayerProps> = ({ exerci
   const archetype = detectMotionArchetype(exercise);
 
   useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]) {
+          setIsVisible(entries[0].isIntersecting);
+        }
+      },
+      { threshold: 0.05 }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!isPlaying || (!isVisible && !isFullscreenModal)) return;
     let animId: number;
-    let startTime = performance.now();
+    const startTime = performance.now();
 
     const renderFrame = (now: number) => {
       const elapsed = ((now - startTime) / 1000) * speed;
-      // 3.6 second full rep cycle
       const cycle = (elapsed % 3.6) / 3.6;
-      // Smooth 0 -> 1 -> 0 rep curve with brief top hold
       let t = 0;
       let currentPhase = 'Eccentric Control (3s)';
       if (cycle < 0.38) {
@@ -72,9 +89,12 @@ export const ExerciseVideoPlayer: React.FC<ExerciseVideoPlayerProps> = ({ exerci
         currentPhase = 'Strict Eccentric Lowering';
       }
 
-      setPhaseLabel(currentPhase);
+      if (lastPhaseRef.current !== currentPhase) {
+        lastPhaseRef.current = currentPhase;
+        setPhaseLabel(currentPhase);
+      }
 
-      if (canvasRef.current) {
+      if (canvasRef.current && isVisible) {
         drawAthleteCanvas(canvasRef.current, archetype, t, elapsed, cameraAngle, exercise.name);
       }
       if (isFullscreenModal && modalCanvasRef.current) {
@@ -86,16 +106,13 @@ export const ExerciseVideoPlayer: React.FC<ExerciseVideoPlayerProps> = ({ exerci
       }
     };
 
-    if (isPlaying) {
-      animId = requestAnimationFrame(renderFrame);
-    }
-
+    animId = requestAnimationFrame(renderFrame);
     return () => cancelAnimationFrame(animId);
-  }, [isPlaying, speed, cameraAngle, archetype, isFullscreenModal, exercise.name]);
+  }, [isPlaying, isVisible, speed, cameraAngle, archetype, isFullscreenModal, exercise.name]);
 
   return (
     <>
-      <div className="relative rounded-2xl overflow-hidden bg-[#08090E] border border-slate-800 group">
+      <div ref={containerRef} className="relative rounded-2xl overflow-hidden bg-[#08090E] border border-slate-800 group">
         {/* Live 60FPS Short Workout Example Video Canvas */}
         <canvas
           ref={canvasRef}
