@@ -2544,14 +2544,14 @@ async function handleDiscoverNext(req: any, res: any) {
 
   const unseen = () => discoveredCatalogPool.filter((t) => !isExcluded(t));
 
-  // If pool has fewer unseen tracks than requested, run up to 3 fast harvest cycles right now
-  for (let attempts = 0; attempts < 3 && unseen().length < limit; attempts++) {
+  // If pool has fewer unseen tracks than requested, run up to 4 fast harvest cycles right now
+  for (let attempts = 0; attempts < 4 && unseen().length < limit; attempts++) {
     await harvestServerDiscoveryBatch();
   }
 
   const batch = unseen().slice(0, limit);
   // Proactively warm next harvest cycle in background so subsequent requests are instantaneous
-  if (unseen().length < limit + 6) {
+  if (unseen().length < limit + 8) {
     void harvestServerDiscoveryBatch().catch(() => {});
   }
 
@@ -2602,15 +2602,22 @@ async function startServer() {
         }
       }
       // Warm perpetual verified discovery pool gently so new songs are ready for installed/downloaded apps immediately
-      for (let i = 0; i < 6; i++) {
+      for (let i = 0; i < 10; i++) {
         try {
           await harvestServerDiscoveryBatch();
-          await new Promise((r) => setTimeout(r, 1200));
+          await new Promise((r) => setTimeout(r, 1100));
         } catch {
           // ignore
         }
       }
     })();
+
+    // Keep background discovery pool continuously stocked for installed PWAs
+    setInterval(() => {
+      if (discoveredCatalogPool.length < 400 && !serverHarvestInFlight) {
+        void harvestServerDiscoveryBatch().catch(() => {});
+      }
+    }, 25000);
   });
 }
 
