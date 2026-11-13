@@ -477,9 +477,13 @@ class SanctuaryAudioEngine {
     this.emitTick();
     this.startProgressLoop();
 
-    // 2. ALWAYS prioritize 100% Full-Length song stream (/api/music/full-song) or cached offline full song blob!
+    // 2. Prioritize cached offline blob, then direct stream URL, then full-length server stream
     const syncBlobUrl = getCachedBlobUrlSync(track.id);
-    const audioSrc = syncBlobUrl || getFullSongStreamUrl(track);
+    const audioSrc =
+      syncBlobUrl ||
+      track.directStreamUrl ||
+      this.resolvedDirectUrls.get(track.id) ||
+      getFullSongStreamUrl(track);
 
     const audio = this.getOrCreateAudioElement();
     audio.src = audioSrc;
@@ -487,13 +491,13 @@ class SanctuaryAudioEngine {
     audio.muted = false;
     audio.load();
 
-    // Allow 18 seconds for cold full-length 3-8 minute master song assembly before retrying
+    // Allow 15 seconds for audio loading before checking stall
     this.stallWatchdogTimer = window.setTimeout(() => {
       if (requestId !== this.playRequestId || !this.isPlaying) return;
       if (!audio.currentTime && (audio.paused || audio.readyState < 2)) {
         this.handleStreamFallback(track, requestId, startOffset);
       }
-    }, 18000);
+    }, 15000);
 
     // 3. Call audio.play() synchronously within the user's click/tap event!
     const playPromise = audio.play();
@@ -517,10 +521,30 @@ class SanctuaryAudioEngine {
           }
           this.startProgressLoop();
         })
-        .catch((err) => {
+        .catch(async (err) => {
           if (requestId !== this.playRequestId || !this.isPlaying) return;
           if (err?.name === 'AbortError') return;
-          this.handleStreamFallback(track, requestId, startOffset);
+
+          // Try resolving direct audio URL
+          try {
+            const direct =
+              track.directStreamUrl ||
+              this.resolvedDirectUrls.get(track.id) ||
+              (await resolveDirectItunesAudioUrl(track));
+            if (requestId !== this.playRequestId || !this.isPlaying) return;
+            if (direct) {
+              this.resolvedDirectUrls.set(track.id, direct);
+              audio.src = `/api/music/proxy-audio?url=${encodeURIComponent(direct)}`;
+              audio.load();
+              await audio.play();
+              this.startProgressLoop();
+              return;
+            }
+          } catch {
+            // ignore
+          }
+
+          this.pause();
         });
     }
   }
