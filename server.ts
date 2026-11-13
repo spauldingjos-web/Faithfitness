@@ -11,6 +11,15 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 app.use(express.json());
 
+app.use((req, res, next) => {
+  if (req.path === '/sw.js' || req.path === '/manifest.json') {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }
+  next();
+});
+
 let genAiClient: GoogleGenAI | null = null;
 function getGenAI(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -1693,8 +1702,16 @@ app.get('/api/music/full-song', async (req, res) => {
     const range = req.headers.range;
     if (range) {
       const parts = range.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : totalLength - 1;
+      let start = parts[0] ? parseInt(parts[0], 10) : NaN;
+      let end = parts[1] ? parseInt(parts[1], 10) : NaN;
+      if (Number.isNaN(start) && !Number.isNaN(end)) {
+        // Suffix byte range e.g. bytes=-500
+        start = Math.max(0, totalLength - end);
+        end = totalLength - 1;
+      } else {
+        if (Number.isNaN(start)) start = 0;
+        if (Number.isNaN(end)) end = totalLength - 1;
+      }
       const clampedStart = Math.max(0, Math.min(start, totalLength - 1));
       const clampedEnd = Math.max(clampedStart, Math.min(end, totalLength - 1));
       const chunkLength = clampedEnd - clampedStart + 1;

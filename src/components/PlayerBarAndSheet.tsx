@@ -37,7 +37,7 @@ interface PlayerBarAndSheetProps {
   isPlaying: boolean;
   currentTime: number;
   duration: number;
-  spectrum: number[];
+  spectrum?: number[];
   volume: number;
   isShuffle: boolean;
   isRepeat: boolean;
@@ -480,6 +480,8 @@ export const PlayerBarAndSheet: React.FC<PlayerBarAndSheetProps> = ({
                           <img
                             src={trk.coverUrl}
                             alt={trk.title}
+                            loading="lazy"
+                            decoding="async"
                             referrerPolicy="no-referrer"
                             onError={(e) => {
                               (e.currentTarget as HTMLImageElement).src = COVER_ROCK_ALTAR;
@@ -618,9 +620,6 @@ export const PlayerBarAndSheet: React.FC<PlayerBarAndSheetProps> = ({
               <TrackVideoCanvas
                 track={currentTrack}
                 isPlaying={isPlaying}
-                currentTime={currentTime}
-                duration={duration}
-                spectrum={spectrum}
                 mode="mini"
                 className="w-full h-full"
               />

@@ -29,9 +29,9 @@ interface GenrePageViewProps {
   tracks: Track[];
   currentTrack: Track;
   isPlaying: boolean;
-  currentTime: number;
-  duration: number;
-  spectrum: number[];
+  currentTime?: number;
+  duration?: number;
+  spectrum?: number[];
   bookmarkedIds: string[];
   offlineIds: string[];
   isCachingOffline: boolean;
@@ -96,14 +96,11 @@ function formatDur(sec: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export const GenrePageView: React.FC<GenrePageViewProps> = ({
+export const GenrePageView: React.FC<GenrePageViewProps> = React.memo(({
   genreId,
   tracks,
   currentTrack,
   isPlaying,
-  currentTime,
-  duration,
-  spectrum,
   bookmarkedIds,
   offlineIds,
   isCachingOffline,
@@ -342,9 +339,6 @@ export const GenrePageView: React.FC<GenrePageViewProps> = ({
           tracks={visibleTracks}
           currentTrack={currentTrack}
           isPlaying={isPlaying}
-          currentTime={currentTime}
-          duration={duration}
-          spectrum={spectrum}
           likedTrackIds={bookmarkedIds}
           onSelectTrack={(trk) => onSelectTrack(trk, 0)}
           onTogglePlay={onTogglePlay}
@@ -429,6 +423,8 @@ export const GenrePageView: React.FC<GenrePageViewProps> = ({
                       <img
                         src={trk.coverUrl}
                         alt={trk.title}
+                        loading="lazy"
+                        decoding="async"
                         referrerPolicy="no-referrer"
                         onError={(e) => {
                           (e.currentTarget as HTMLImageElement).src = visuals.banner;
@@ -525,4 +521,4 @@ export const GenrePageView: React.FC<GenrePageViewProps> = ({
       </section>
     </div>
   );
-};
+});

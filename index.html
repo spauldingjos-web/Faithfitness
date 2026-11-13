@@ -28,7 +28,7 @@
         window.dispatchEvent(new Event('pwa-prompt-ready'));
       });
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {});
+        navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' }).catch(function () {});
       }
     </script>
   </head>

@@ -67,6 +67,10 @@ class SanctuaryAudioEngine {
   private prewarmedTrackKeys = new Set<string>();
   private stallRecoveryTimer: number | null = null;
   private mediaSessionCallbacksRegistered = false;
+  private lastPlayStartedAt = 0;
+  private lastEmittedAtMs = 0;
+  private lastMediaNavAt = 0;
+  private readonly pausedSpectrum = Array(16).fill(8);
 
   private onTickCallback: (
     currentTime: number,
@@ -127,9 +131,15 @@ class SanctuaryAudioEngine {
           this.pause();
         });
         ms.setActionHandler('previoustrack', () => {
+          const now = Date.now();
+          if (now - this.lastMediaNavAt < 650) return;
+          this.lastMediaNavAt = now;
           this.onPrevCallback?.();
         });
         ms.setActionHandler('nexttrack', () => {
+          const now = Date.now();
+          if (now - this.lastMediaNavAt < 650) return;
+          this.lastMediaNavAt = now;
           this.onNextCallback?.();
         });
         ms.setActionHandler('seekto', (details) => {
@@ -214,17 +224,22 @@ class SanctuaryAudioEngine {
         if (Number.isFinite(el.duration) && el.duration >= 95) {
           this.activeDuration = Math.round(el.duration);
         }
-        this.emitTick();
+        const now = Date.now();
+        if (now - this.lastEmittedAtMs >= 140) {
+          this.emitTick();
+        }
       });
 
       el.addEventListener('pause', () => {
         if (!this.isPlaying || el.ended || !this.currentTrack) return;
+        // Avoid aggressive auto-resume loops if audio element has an error or isn't ready
+        if (el.error || el.readyState < 2) return;
         const capturedReq = this.playRequestId;
         window.setTimeout(() => {
-          if (capturedReq === this.playRequestId && this.isPlaying && el.paused && !el.ended) {
+          if (capturedReq === this.playRequestId && this.isPlaying && el.paused && !el.ended && !el.error) {
             el.play().catch(() => {});
           }
-        }, 180);
+        }, 300);
       });
 
       el.addEventListener('error', () => {
@@ -234,21 +249,25 @@ class SanctuaryAudioEngine {
 
       el.addEventListener('ended', () => {
         if (!this.isPlaying) return;
-        // Never treat playback ending under 35 seconds as a completed song (prevents machine-gun playlist skipping)
-        if (this.currentTime < 35) {
+        // Anti-rapid-skip circuit breaker: never treat playback ending < 5s after load or < 35s played as natural completion
+        const msSinceStart = Date.now() - this.lastPlayStartedAt;
+        if (msSinceStart < 5000 || this.currentTime < 35) {
           return;
         }
-        const realEndThreshold = Math.max(
-          45,
-          (Number.isFinite(el.duration) && el.duration >= 95 ? el.duration : this.activeDuration) - 10
-        );
+        const knownDur =
+          Number.isFinite(el.duration) && el.duration >= 60 ? el.duration : this.activeDuration;
+        const realEndThreshold = Math.max(45, knownDur - 12);
         if (
           el.src.includes('/api/music/full-song') &&
-          this.currentTime > 3 &&
           this.currentTime < realEndThreshold &&
           !this.triedDirectFallbackForRequest.has(this.playRequestId)
         ) {
           this.handleStreamFallback(this.currentTrack!, this.playRequestId, this.currentTime);
+          return;
+        }
+        if (this.currentTime < realEndThreshold) {
+          // Ended unexpectedly early (e.g., 30s fallback clip ended) — pause instead of skipping playlist
+          this.pause();
           return;
         }
         this.finishFullTrackPlayback();
@@ -325,9 +344,11 @@ class SanctuaryAudioEngine {
     this.stopProgressTimer();
     this.clearWatchdog();
     this.clearStallRecovery();
+    this.currentTime = 0;
     if (this.audioEl) {
       try {
         this.audioEl.pause();
+        this.audioEl.currentTime = 0;
       } catch {
         // ignore reset errors
       }
@@ -471,19 +492,16 @@ class SanctuaryAudioEngine {
 
     this.currentTrack = track;
     this.currentTime = startOffset;
+    this.lastPlayStartedAt = Date.now();
     this.activeDuration = Math.max(180, track.duration || 220);
     this.isPlaying = true;
     this.updateMediaSession(track, true);
     this.emitTick();
     this.startProgressLoop();
 
-    // 2. Prioritize cached offline blob, then direct stream URL, then full-length server stream
+    // 2. Always prioritize cached full-length offline blob, then full-length server stream (/api/music/full-song)
     const syncBlobUrl = getCachedBlobUrlSync(track.id);
-    const audioSrc =
-      syncBlobUrl ||
-      track.directStreamUrl ||
-      this.resolvedDirectUrls.get(track.id) ||
-      getFullSongStreamUrl(track);
+    const audioSrc = syncBlobUrl || getFullSongStreamUrl(track);
 
     const audio = this.getOrCreateAudioElement();
     audio.src = audioSrc;
@@ -524,27 +542,11 @@ class SanctuaryAudioEngine {
         .catch(async (err) => {
           if (requestId !== this.playRequestId || !this.isPlaying) return;
           if (err?.name === 'AbortError') return;
-
-          // Try resolving direct audio URL
-          try {
-            const direct =
-              track.directStreamUrl ||
-              this.resolvedDirectUrls.get(track.id) ||
-              (await resolveDirectItunesAudioUrl(track));
-            if (requestId !== this.playRequestId || !this.isPlaying) return;
-            if (direct) {
-              this.resolvedDirectUrls.set(track.id, direct);
-              audio.src = `/api/music/proxy-audio?url=${encodeURIComponent(direct)}`;
-              audio.load();
-              await audio.play();
-              this.startProgressLoop();
-              return;
-            }
-          } catch {
-            // ignore
+          if (err?.name === 'NotAllowedError') {
+            this.pause();
+            return;
           }
-
-          this.pause();
+          await this.handleStreamFallback(track, requestId, startOffset);
         });
     }
   }
@@ -628,32 +630,31 @@ class SanctuaryAudioEngine {
   private startProgressLoop() {
     this.stopProgressTimer();
     this.progressTimer = window.setInterval(() => {
-      if (!this.isPlaying || !this.currentTrack) return;
-      if (this.audioEl) {
-        if (this.audioEl.paused && !this.audioEl.ended && this.audioEl.readyState >= 2) {
-          this.audioEl.play().catch(() => {});
+      if (!this.isPlaying || !this.currentTrack || !this.audioEl) return;
+      if (!this.audioEl.paused) {
+        this.currentTime = this.audioEl.currentTime;
+        if (Number.isFinite(this.audioEl.duration) && this.audioEl.duration >= 95) {
+          this.activeDuration = Math.round(this.audioEl.duration);
         }
-        if (!this.audioEl.paused) {
-          this.currentTime = this.audioEl.currentTime;
-          if (Number.isFinite(this.audioEl.duration) && this.audioEl.duration >= 95) {
-            this.activeDuration = Math.round(this.audioEl.duration);
-          }
-          this.emitTick();
-        }
+        this.emitTick();
       }
-    }, 65);
+    }, 160);
   }
 
   private emitTick() {
     if (!this.onTickCallback || !this.currentTrack) return;
-    const spectrum = this.getSpectrum();
+    this.lastEmittedAtMs = Date.now();
     const section = getSongSectionAtTime(this.currentTime, this.activeDuration);
-    this.onTickCallback(this.currentTime, this.activeDuration, spectrum, section);
+    this.onTickCallback(this.currentTime, this.activeDuration, this.pausedSpectrum, section);
+  }
+
+  public getLiveSpectrum(): number[] {
+    return this.getSpectrum();
   }
 
   private getSpectrum(): number[] {
     if (!this.isPlaying || !this.currentTrack || !this.audioEl || this.audioEl.paused) {
-      return Array(16).fill(8);
+      return this.pausedSpectrum;
     }
     const bars: number[] = [];
     const bpmFactor = (this.currentTrack.bpm || 128) / 60;

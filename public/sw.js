@@ -1,5 +1,5 @@
-const CACHE_NAME = 'sanctuary-pulse-v13';
-const AUDIO_CACHE_NAME = 'sanctuary-audio-vault-v13';
+const CACHE_NAME = 'sanctuary-pulse-v14';
+const AUDIO_CACHE_NAME = 'sanctuary-audio-vault-v14';
 
 const APP_SHELL = [
   '/',
@@ -9,6 +9,35 @@ const APP_SHELL = [
   '/pwa-512x512.png',
   '/apple-touch-icon.png',
 ];
+
+function isCacheableStaticAsset(url) {
+  const path = url.pathname;
+  // Never cache Vite dev modules, source files, HMR clients, or API responses
+  if (
+    path.startsWith('/api/') ||
+    path.startsWith('/src/') ||
+    path.startsWith('/@vite') ||
+    path.startsWith('/@react-refresh') ||
+    path.startsWith('/@id/') ||
+    path.startsWith('/@fs/') ||
+    path.startsWith('/node_modules/') ||
+    path.includes('hot-update') ||
+    url.searchParams.has('t')
+  ) {
+    return false;
+  }
+  return (
+    path === '/' ||
+    path === '/manifest.json' ||
+    path.startsWith('/assets/') ||
+    path.endsWith('.png') ||
+    path.endsWith('.jpg') ||
+    path.endsWith('.jpeg') ||
+    path.endsWith('.svg') ||
+    path.endsWith('.webp') ||
+    path.endsWith('.woff2')
+  );
+}
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -40,16 +69,26 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
 
-  // Never intercept dynamic /api/ endpoints with the service worker; let the app & IndexedDB handle audio
-  if (url.pathname.startsWith('/api/')) {
+  // Never intercept dynamic /api/ or Vite dev module endpoints with the service worker
+  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) {
     return;
   }
 
-  // Network-First with runtime caching and offline shell fallback
+  // Only handle navigation & cacheable static assets; let dev modules bypass SW cleanly
+  if (request.mode !== 'navigate' && !isCacheableStaticAsset(url)) {
+    return;
+  }
+
+  // Network-First with runtime caching for production assets and offline shell fallback
   event.respondWith(
     fetch(request)
       .then((response) => {
-        if (response && response.status === 200 && response.type === 'basic') {
+        if (
+          response &&
+          response.status === 200 &&
+          response.type === 'basic' &&
+          isCacheableStaticAsset(url)
+        ) {
           const clone = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(request, clone)).catch(() => {});
         }

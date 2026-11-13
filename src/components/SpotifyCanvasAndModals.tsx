@@ -18,7 +18,7 @@ import {
   Download,
 } from 'lucide-react';
 import { Track, Playlist, COVER_ROCK_ALTAR } from '../data/musicCatalog';
-import { getSongSectionAtTime } from '../utils/audioEngine';
+import { audioEngine, getSongSectionAtTime } from '../utils/audioEngine';
 import { downloadTrackToDevice } from '../utils/offlineVault';
 
 export interface TimedLyricLine {
@@ -764,7 +764,7 @@ interface TrackVideoCanvasProps {
  */
 const EMPTY_SPECTRUM: number[] = [];
 
-export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
+export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = React.memo(({
   track,
   isPlaying,
   currentTime = 0,
@@ -788,7 +788,7 @@ export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
     let active = true;
     setResolvedYoutubeId((prev) => (prev === firstCandidate ? prev : firstCandidate));
 
-    if (!firstCandidate) {
+    if (showOfficialVideoEmbed && !firstCandidate) {
       fetch(
         `/api/music/resolve?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`
       )
@@ -806,7 +806,7 @@ export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
     return () => {
       active = false;
     };
-  }, [track.id, track.title, track.artist, firstCandidate]);
+  }, [track.id, track.title, track.artist, firstCandidate, showOfficialVideoEmbed]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -816,6 +816,7 @@ export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
 
     let animId = 0;
     let frame = 0;
+    let lastDrawAt = 0;
 
     const getPalette = () => {
       switch (track.genre) {
@@ -835,27 +836,30 @@ export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
     };
 
     const palette = getPalette();
-    const particles = Array.from({ length: mode === 'mini' ? 10 : 36 }, (_, i) => ({
+    const particleCount = mode === 'mini' ? 8 : mode === 'card' ? 16 : 32;
+    const particles = Array.from({ length: particleCount }, (_, i) => ({
       x: (i * 37) % 100,
       y: (i * 53) % 100,
-      size: 2 + (i % 4) * 1.6,
-      speedY: 0.28 + (i % 5) * 0.16,
-      speedX: ((i % 3) - 1) * 0.15,
+      size: 2 + (i % 4) * 1.4,
+      speedY: 0.35 + (i % 5) * 0.2,
+      speedX: ((i % 3) - 1) * 0.18,
       alpha: 0.35 + (i % 5) * 0.12,
     }));
 
-    const render = () => {
-      frame += isPlaying ? 1 : 0.25;
+    const drawFrame = () => {
+      frame += isPlaying ? 1 : 0;
       const w = canvas.width;
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
 
-      const liveSpec = spectrumRef.current;
+      const liveSpec = isPlaying
+        ? (spectrumRef.current.length > 0 ? spectrumRef.current : audioEngine.getLiveSpectrum())
+        : spectrumRef.current;
       const avgSpec =
         liveSpec.length > 0
           ? liveSpec.reduce((acc, v) => acc + v, 0) / liveSpec.length
           : isPlaying
-            ? 48 + Math.sin(frame * 0.15) * 26
+            ? 48 + Math.sin(frame * 0.18) * 26
             : 20;
       const beatPulse = Math.min(1, avgSpec / 85);
 
@@ -916,7 +920,7 @@ export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
 
       // 4. Audio Equalizer Wave Ribbon
       if (mode !== 'mini') {
-        const bars = 28;
+        const bars = mode === 'card' ? 16 : 24;
         const barWidth = w / bars;
         for (let i = 0; i < bars; i++) {
           const specVal =
@@ -929,11 +933,25 @@ export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
         }
         ctx.globalAlpha = 1;
       }
-
-      animId = requestAnimationFrame(render);
     };
 
-    animId = requestAnimationFrame(render);
+    // Draw initial static lighting frame cleanly without running an idle 60fps loop when paused
+    drawFrame();
+
+    if (!isPlaying) {
+      return;
+    }
+
+    const renderLoop = (now: number) => {
+      // Cap active canvas animation at ~28fps so mobile & downloaded PWAs stay responsive without image lag
+      if (now - lastDrawAt >= 35) {
+        lastDrawAt = now;
+        drawFrame();
+      }
+      animId = requestAnimationFrame(renderLoop);
+    };
+
+    animId = requestAnimationFrame(renderLoop);
     return () => cancelAnimationFrame(animId);
   }, [track.id, track.genre, isPlaying, mode]);
 
@@ -961,6 +979,8 @@ export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
       <img
         src={track.coverUrl}
         alt={track.title}
+        loading="lazy"
+        decoding="async"
         referrerPolicy="no-referrer"
         onError={(e) => {
           (e.currentTarget as HTMLImageElement).src = COVER_ROCK_ALTAR;
@@ -992,11 +1012,11 @@ export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
       {/* Cinema Gradient Vignette */}
       <div className="absolute inset-0 bg-gradient-to-t from-[#07090E]/90 via-transparent to-black/50 pointer-events-none" />
 
-      {/* 60fps Full-Bleed Concert Lighting, Embers & Waveform Canvas */}
+      {/* Beat-Reactive Concert Lighting, Embers & Waveform Canvas */}
       <canvas
         ref={canvasRef}
-        width={mode === 'mini' ? 120 : 720}
-        height={mode === 'mini' ? 120 : 1280}
+        width={mode === 'mini' ? 96 : mode === 'card' ? 240 : 540}
+        height={mode === 'mini' ? 96 : mode === 'card' ? 400 : 960}
         className="absolute inset-0 w-full h-full pointer-events-none block"
         style={{ width: '100%', height: '100%' }}
       />
@@ -1035,15 +1055,15 @@ export const TrackVideoCanvas: React.FC<TrackVideoCanvasProps> = ({
       )}
     </div>
   );
-};
+});
 
 interface SpotifyVideoFeedStripProps {
   tracks: Track[];
   currentTrack: Track;
   isPlaying: boolean;
-  currentTime: number;
-  duration: number;
-  spectrum: number[];
+  currentTime?: number;
+  duration?: number;
+  spectrum?: number[];
   likedTrackIds: string[];
   onSelectTrack: (track: Track) => void;
   onTogglePlay: () => void;
@@ -1057,13 +1077,10 @@ interface SpotifyVideoFeedStripProps {
  * Spotify-style Vertical 9:16 Video Canvas Preview Row on the Home Screen.
  * Every card has explicit full 9:16 dimensions + Like ♥, + Playlist, and Share buttons.
  */
-export const SpotifyVideoFeedStrip: React.FC<SpotifyVideoFeedStripProps> = ({
+export const SpotifyVideoFeedStrip: React.FC<SpotifyVideoFeedStripProps> = React.memo(({
   tracks,
   currentTrack,
   isPlaying,
-  currentTime,
-  duration,
-  spectrum,
   likedTrackIds,
   onSelectTrack,
   onTogglePlay,
@@ -1125,9 +1142,6 @@ export const SpotifyVideoFeedStrip: React.FC<SpotifyVideoFeedStripProps> = ({
               <TrackVideoCanvas
                 track={trk}
                 isPlaying={isCardActive}
-                currentTime={isCurrent ? currentTime : 45}
-                duration={isCurrent ? duration : trk.duration}
-                spectrum={isCurrent ? spectrum : []}
                 mode="card"
                 showOfficialVideoEmbed={isCurrent && isPlaying}
                 className="absolute inset-0 w-full h-full"
@@ -1247,7 +1261,7 @@ export const SpotifyVideoFeedStrip: React.FC<SpotifyVideoFeedStripProps> = ({
       </div>
     </section>
   );
-};
+});
 
 interface FullScreenVideoFeedModalProps {
   isOpen: boolean;
@@ -1257,7 +1271,7 @@ interface FullScreenVideoFeedModalProps {
   isPlaying: boolean;
   currentTime: number;
   duration: number;
-  spectrum: number[];
+  spectrum?: number[];
   likedTrackIds: string[];
   onSelectTrack: (track: Track) => void;
   onTogglePlay: () => void;
@@ -1690,6 +1704,8 @@ export const FullScreenVideoFeedModal: React.FC<FullScreenVideoFeedModalProps> =
                   <img
                     src={t.coverUrl}
                     alt={t.title}
+                    loading="lazy"
+                    decoding="async"
                     referrerPolicy="no-referrer"
                     onError={(e) => {
                       (e.currentTarget as HTMLImageElement).src = COVER_ROCK_ALTAR;

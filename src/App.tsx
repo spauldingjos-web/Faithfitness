@@ -191,9 +191,9 @@ export default function App() {
     setSearchQuery(nextVal);
   }, []);
 
-  // Catalog & Live Auto-Feed state (restores all previously released songs across PWA restarts)
+  // Catalog & Live Auto-Feed state (anchors Home cards stably while restoring & appending all persistent releases)
   const [tracks, setTracks] = useState<Track[]>(() =>
-    mergeAndDedupeCatalog([...loadDiscoveredTracksSync(), ...INITIAL_TRACKS])
+    mergeAndDedupeCatalog([...INITIAL_TRACKS, ...loadDiscoveredTracksSync()])
   );
   const tracksRef = useRef<Track[]>(tracks);
   useEffect(() => {
@@ -288,7 +288,6 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(INITIAL_TRACKS[0].duration);
-  const [spectrum, setSpectrum] = useState<number[]>(Array(16).fill(12));
   const [volume, setVolume] = useState(0.85);
   const [isShuffle, setIsShuffle] = useState(false);
   const [isRepeat, setIsRepeat] = useState(false);
@@ -316,15 +315,17 @@ export default function App() {
     }, 2600);
   }, []);
 
-  // Cross-tab / Cross-device real-time sync via BroadcastChannel
+  // Cross-tab / Cross-device Connect sync via BroadcastChannel (isolated per instance so preview & installed PWA never cross-switch songs)
+  const tabInstanceIdRef = useRef<string>(
+    `tab-${Math.random().toString(36).slice(2, 10)}-${Date.now()}`
+  );
   useEffect(() => {
     if (typeof BroadcastChannel === 'undefined') return;
     const channel = new BroadcastChannel('sanctuary_connect_sync');
     channel.onmessage = (ev) => {
       const data = ev.data;
-      if (data?.type === 'TRACK_CHANGE' && data.track) {
-        setCurrentTrack(data.track);
-      } else if (data?.type === 'DEVICE_CHANGE') {
+      if (!data || data.senderId === tabInstanceIdRef.current) return;
+      if (data?.type === 'DEVICE_CHANGE') {
         setActiveDeviceId(data.deviceId);
         setActiveDeviceName(data.deviceName);
       }
@@ -332,12 +333,12 @@ export default function App() {
     return () => channel.close();
   }, []);
 
-  const broadcastSync = (payload: Record<string, unknown>) => {
+  const broadcastSync = useCallback((payload: Record<string, unknown>) => {
     if (typeof BroadcastChannel === 'undefined') return;
     const channel = new BroadcastChannel('sanctuary_connect_sync');
-    channel.postMessage(payload);
+    channel.postMessage({ ...payload, senderId: tabInstanceIdRef.current });
     channel.close();
-  };
+  }, []);
 
   // Navigate to dedicated Genre Page when clicking Country or any Christian genre
   const openGenrePage = useCallback((genreId: ChristianGenre) => {
@@ -426,10 +427,9 @@ export default function App() {
 
   useEffect(() => {
     audioEngine.setCallbacks(
-      (time, dur, spec) => {
+      (time, dur) => {
         setCurrentTime(time);
         setDuration((prev) => (Math.abs(prev - dur) >= 1 ? dur : prev));
-        setSpectrum(spec);
       },
       () => {
         if (isRepeat) {
@@ -451,12 +451,14 @@ export default function App() {
 
   const isSyncingLiveRef = useRef(false);
 
-  // Persist every newly discovered track automatically whenever catalog grows (works reliably with React 18 batching)
+  // Persist every newly discovered track automatically (deferred 400ms so playback clicks stay instant)
   useEffect(() => {
     const nonSeed = tracks.filter((t) => !INITIAL_SEED_ID_SET.has(t.id));
-    if (nonSeed.length > 0) {
+    if (nonSeed.length === 0) return;
+    const timer = window.setTimeout(() => {
       void saveDiscoveredTracksToVault(nonSeed);
-    }
+    }, 400);
+    return () => window.clearTimeout(timer);
   }, [tracks]);
 
   // Live Auto-Ingest Christian Music from Perpetual Server Feed / Apple Music / SoundCloud (Runs Forever & Persists Offline)
@@ -527,7 +529,8 @@ export default function App() {
 
         addedCount = freshBatch.length;
         if (freshBatch.length > 0) {
-          setTracks((prev) => mergeAndDedupeCatalog([...freshBatch, ...prev]));
+          // Append background drops so visible Home Quick Picks / Video Canvas artwork never shift or flicker every 8s
+          setTracks((prev) => mergeAndDedupeCatalog([...prev, ...freshBatch]));
         }
 
         setLastAutoSyncLabel(
@@ -553,7 +556,7 @@ export default function App() {
     if (typeof window !== 'undefined' && 'caches' in window) {
       caches.keys().then((keys) => {
         keys.forEach((k) => {
-          if (k !== 'sanctuary-pulse-v13' && k !== 'sanctuary-audio-vault-v13') {
+          if (k !== 'sanctuary-pulse-v14' && k !== 'sanctuary-audio-vault-v14') {
             caches.delete(k).catch(() => {});
           }
         });
@@ -570,12 +573,12 @@ export default function App() {
     // Hydrate full persistent library from IndexedDB (even beyond localStorage quota)
     void loadDiscoveredTracksFromVault().then((idbTracks) => {
       if (!mounted || idbTracks.length === 0) return;
-      setTracks((prev) => mergeAndDedupeCatalog([...idbTracks, ...prev]));
+      setTracks((prev) => mergeAndDedupeCatalog([...prev, ...idbTracks]));
     });
 
     const admitBatch = (batch: Track[], nextCursor: number) => {
       if (!mounted || batch.length === 0) return;
-      setTracks((prev) => mergeAndDedupeCatalog([...batch, ...prev]));
+      setTracks((prev) => mergeAndDedupeCatalog([...prev, ...batch]));
       liveSeedIdxRef.current = nextCursor;
       setLiveSeedIdx(nextCursor);
       saveDiscoveryCursor(nextCursor);
@@ -720,19 +723,26 @@ export default function App() {
       .slice(0, 12);
   }, [all365Days, searchQuery]);
 
+  // New Releases feed shows newest auto-discovered tracks at the top while keeping Home cards rock-steady
+  const radarOrderedTracks = useMemo(() => {
+    const discovered = tracks.filter((t) => !INITIAL_SEED_ID_SET.has(t.id)).reverse();
+    const core = tracks.filter((t) => INITIAL_SEED_ID_SET.has(t.id));
+    return [...discovered, ...core];
+  }, [tracks]);
+
   // Toggle Like / Bookmark (Spotify Heart ♥)
-  const handleToggleBookmark = (trackId: string) => {
-    const trk = tracks.find((t) => t.id === trackId);
-    const alreadyLiked = bookmarkedIds.includes(trackId);
-    setBookmarkedIds((prev) =>
-      alreadyLiked ? prev.filter((id) => id !== trackId) : [trackId, ...prev]
-    );
-    showToast(
-      alreadyLiked
-        ? `Removed “${trk?.title || 'Song'}” from Liked Songs`
-        : `Added “${trk?.title || 'Song'}” to Liked Songs ♥`
-    );
-  };
+  const handleToggleBookmark = useCallback((trackId: string) => {
+    const trk = tracksRef.current.find((t) => t.id === trackId);
+    setBookmarkedIds((prev) => {
+      const alreadyLiked = prev.includes(trackId);
+      showToast(
+        alreadyLiked
+          ? `Removed “${trk?.title || 'Song'}” from Liked Songs`
+          : `Added “${trk?.title || 'Song'}” to Liked Songs ♥`
+      );
+      return alreadyLiked ? prev.filter((id) => id !== trackId) : [trackId, ...prev];
+    });
+  }, [showToast]);
 
   // Universal 1-Tap Share Song across all sections
   const handleShareTrack = useCallback((trk: Track) => {
@@ -896,36 +906,43 @@ export default function App() {
     }
   };
 
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
+
   // Toggle Play/Pause
-  const handleTogglePlay = () => {
-    if (isPlaying) {
+  const handleTogglePlay = useCallback(() => {
+    if (isPlayingRef.current) {
       audioEngine.pause();
       setIsPlaying(false);
     } else {
       if (audioEngine.hasActiveAudio()) {
         audioEngine.resume(currentTrack);
       } else {
-        audioEngine.loadAndPlay(currentTrack, currentTime);
+        audioEngine.loadAndPlay(currentTrack, currentTimeRef.current);
       }
       setIsPlaying(true);
     }
-  };
+  }, [currentTrack]);
 
   // Open Full-Screen Video Mode and guarantee active playback so lyrics & video move immediately
-  const handleOpenFullScreenVideo = (targetTrack?: Track) => {
+  const handleOpenFullScreenVideo = useCallback((targetTrack?: Track) => {
     const trk = targetTrack || currentTrack;
     if (targetTrack && targetTrack.id !== currentTrack.id) {
       handleSelectTrack(targetTrack, 0);
-    } else if (!isPlaying) {
+    } else if (!isPlayingRef.current) {
       if (audioEngine.hasActiveAudio()) {
         audioEngine.resume(trk);
       } else {
-        audioEngine.loadAndPlay(trk, currentTime);
+        audioEngine.loadAndPlay(trk, currentTimeRef.current);
       }
       setIsPlaying(true);
     }
     setIsVideoFeedOpen(true);
-  };
+  }, [currentTrack, handleSelectTrack]);
+
+  const handleOpenPlaylistModal = useCallback((trk: Track) => {
+    setPlaylistPickerTrack(trk);
+  }, []);
 
   const formatDuration = (sec: number) => {
     const s = Math.max(0, Math.floor(sec));
@@ -1316,6 +1333,8 @@ export default function App() {
                                 <img
                                   src={trk.coverUrl}
                                   alt={trk.title}
+                                  loading="lazy"
+                                  decoding="async"
                                   referrerPolicy="no-referrer"
                                   onError={(e) => {
                                     (e.currentTarget as HTMLImageElement).src = COVER_ROCK_ALTAR;
@@ -1589,18 +1608,13 @@ export default function App() {
                     tracks={filteredTracks.length > 0 ? filteredTracks : tracks}
                     currentTrack={currentTrack}
                     isPlaying={isPlaying}
-                    currentTime={currentTime}
-                    duration={duration}
-                    spectrum={spectrum}
                     likedTrackIds={bookmarkedIds}
-                    onSelectTrack={(trk) => handleSelectTrack(trk, 0)}
+                    onSelectTrack={handleSelectTrack}
                     onTogglePlay={handleTogglePlay}
                     onToggleLike={handleToggleBookmark}
-                    onOpenAddToPlaylist={(trk) => setPlaylistPickerTrack(trk)}
+                    onOpenAddToPlaylist={handleOpenPlaylistModal}
                     onShareTrack={handleShareTrack}
-                    onOpenFullScreenFeed={(trk) => {
-                      handleOpenFullScreenVideo(trk);
-                    }}
+                    onOpenFullScreenFeed={handleOpenFullScreenVideo}
                   />
 
                   {/* YouTube Music / Spotify Style "Speed Dial / Quick Picks" Grid (18 Songs) */}
@@ -1641,6 +1655,8 @@ export default function App() {
                                 <img
                                   src={trk.coverUrl}
                                   alt={trk.title}
+                                  loading="lazy"
+                                  decoding="async"
                                   referrerPolicy="no-referrer"
                                   onError={(e) => {
                                     (e.currentTarget as HTMLImageElement).src = COVER_ROCK_ALTAR;
@@ -1864,6 +1880,8 @@ export default function App() {
                               <img
                                 src={trk.coverUrl}
                                 alt={trk.title}
+                                loading="lazy"
+                                decoding="async"
                                 referrerPolicy="no-referrer"
                                 onError={(e) => {
                                   (e.currentTarget as HTMLImageElement).src = COVER_ROCK_ALTAR;
@@ -2047,6 +2065,8 @@ export default function App() {
                               <img
                                 src={trk.coverUrl}
                                 alt={trk.title}
+                                loading="lazy"
+                                decoding="async"
                                 referrerPolicy="no-referrer"
                                 onError={(e) => {
                                   (e.currentTarget as HTMLImageElement).src = COVER_ROCK_ALTAR;
@@ -2131,9 +2151,6 @@ export default function App() {
                   tracks={tracks}
                   currentTrack={currentTrack}
                   isPlaying={isPlaying}
-                  currentTime={currentTime}
-                  duration={duration}
-                  spectrum={spectrum}
                   bookmarkedIds={bookmarkedIds}
                   offlineIds={offlineIds}
                   isCachingOffline={isCachingAllOffline}
@@ -2148,12 +2165,12 @@ export default function App() {
                     handleSelectTrack(rand, 0);
                   }}
                   onToggleBookmark={handleToggleBookmark}
-                  onOpenAddToPlaylist={(trk) => setPlaylistPickerTrack(trk)}
+                  onOpenAddToPlaylist={handleOpenPlaylistModal}
                   onShareTrack={handleShareTrack}
                   onOpenRingtoneStudio={(trk) => setRingtoneStudioTrack(trk)}
                   onToggleOffline={handleToggleOffline}
                   onSaveGenreOffline={(genreTracks) => handleCacheAllOffline(genreTracks)}
-                  onOpenFullScreenFeed={(trk) => handleOpenFullScreenVideo(trk)}
+                  onOpenFullScreenFeed={handleOpenFullScreenVideo}
                 />
               )}
 
@@ -2232,7 +2249,7 @@ export default function App() {
                   </div>
 
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    {tracks.map((trk) => {
+                    {radarOrderedTracks.map((trk) => {
                       const isCurrent = currentTrack.id === trk.id;
                       const isLiked = bookmarkedIds.includes(trk.id);
                       const isOffline = offlineIds.includes(trk.id);
@@ -2256,6 +2273,8 @@ export default function App() {
                               <img
                                 src={trk.coverUrl}
                                 alt={trk.title}
+                                loading="lazy"
+                                decoding="async"
                                 referrerPolicy="no-referrer"
                                 onError={(e) => {
                                   (e.currentTarget as HTMLImageElement).src = COVER_HIPHOP_CROWN;
@@ -2907,7 +2926,6 @@ export default function App() {
         isPlaying={isPlaying}
         currentTime={currentTime}
         duration={duration}
-        spectrum={spectrum}
         volume={volume}
         isShuffle={isShuffle}
         isRepeat={isRepeat}
@@ -2964,7 +2982,6 @@ export default function App() {
         isPlaying={isPlaying}
         currentTime={currentTime}
         duration={duration}
-        spectrum={spectrum}
         likedTrackIds={bookmarkedIds}
         onSelectTrack={(trk) => handleSelectTrack(trk, 0)}
         onTogglePlay={handleTogglePlay}
