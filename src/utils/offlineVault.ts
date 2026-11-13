@@ -1,4 +1,10 @@
-import { Playlist, Track, INITIAL_PLAYLISTS, INITIAL_TRACKS } from '../data/musicCatalog';
+import {
+  Playlist,
+  Track,
+  INITIAL_PLAYLISTS,
+  INITIAL_TRACKS,
+  normalizeTrackCoverUrl,
+} from '../data/musicCatalog';
 
 const DB_NAME = 'SanctuaryOfflineVaultDB';
 const DB_VERSION = 9;
@@ -128,7 +134,11 @@ export function loadDiscoveredTracksSync(): Track[] {
     const raw = localStorage.getItem(DISCOVERED_TRACKS_LS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as Track[]) : [];
+    if (!Array.isArray(parsed)) return [];
+    return (parsed as Track[]).map((t) => ({
+      ...t,
+      coverUrl: normalizeTrackCoverUrl(t.coverUrl, t.genre),
+    }));
   } catch {
     return [];
   }
@@ -147,7 +157,12 @@ export async function loadDiscoveredTracksFromVault(): Promise<Track[]> {
 
     const byId = new Map<string, Track & { discoveredAtMs?: number }>();
     for (const t of idbTracks) {
-      if (t?.id) byId.set(t.id, t);
+      if (t?.id) {
+        byId.set(t.id, {
+          ...t,
+          coverUrl: normalizeTrackCoverUrl(t.coverUrl, t.genre),
+        });
+      }
     }
     for (const t of lsTracks) {
       if (t?.id && !byId.has(t.id)) {
@@ -156,7 +171,7 @@ export async function loadDiscoveredTracksFromVault(): Promise<Track[]> {
     }
 
     return Array.from(byId.values()).sort(
-      (a, b) => (b.discoveredAtMs || 0) - (a.discoveredAtMs || 0)
+      (a, b) => (a.discoveredAtMs || 0) - (b.discoveredAtMs || 0)
     );
   } catch {
     return lsTracks;
@@ -166,13 +181,13 @@ export async function loadDiscoveredTracksFromVault(): Promise<Track[]> {
 export async function saveDiscoveredTracksToVault(discoveredTracks: Track[]): Promise<void> {
   if (!Array.isArray(discoveredTracks) || discoveredTracks.length === 0) return;
 
-  // Store fast synchronous window in localStorage (up to 450 most recent releases to stay well under quota)
+  // Store fast synchronous window in localStorage (up to 450 NEWEST releases to stay well under quota)
   try {
-    const lsSlice = discoveredTracks.slice(0, 450);
+    const lsSlice = discoveredTracks.slice(-450);
     localStorage.setItem(DISCOVERED_TRACKS_LS_KEY, JSON.stringify(lsSlice));
   } catch {
     try {
-      const smallerSlice = discoveredTracks.slice(0, 150);
+      const smallerSlice = discoveredTracks.slice(-150);
       localStorage.setItem(DISCOVERED_TRACKS_LS_KEY, JSON.stringify(smallerSlice));
     } catch {
       // ignore localStorage quota errors; IndexedDB holds full catalog
@@ -185,11 +200,11 @@ export async function saveDiscoveredTracksToVault(discoveredTracks: Track[]): Pr
     const tx = db.transaction(STORE_DISCOVERED_TRACKS, 'readwrite');
     const store = tx.objectStore(STORE_DISCOVERED_TRACKS);
     const now = Date.now();
-    discoveredTracks.slice(0, 3000).forEach((trk, idx) => {
+    discoveredTracks.slice(-3000).forEach((trk, idx) => {
       if (!trk?.id) return;
       store.put({
         ...trk,
-        discoveredAtMs: (trk as Track & { discoveredAtMs?: number }).discoveredAtMs || now - idx,
+        discoveredAtMs: (trk as Track & { discoveredAtMs?: number }).discoveredAtMs || now + idx,
       });
     });
   } catch {
@@ -362,12 +377,38 @@ export async function fetchAndCacheTrackOffline(track: Track): Promise<boolean> 
     const url = `/api/music/full-song?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}&id=${encodeURIComponent(track.id)}`;
     const response = await fetch(url);
     if (response.ok) {
-      const contentType = response.headers.get('content-type') || '';
+      const contentType = response.headers.get('content-type') || 'audio/mpeg';
       if (contentType.includes('audio') || contentType.includes('octet-stream')) {
-        const blob = await response.blob();
-        if (blob && blob.size >= MIN_FULL_SONG_BYTES) {
-          await saveTrackAudioBlob(track.id, blob);
-          return true;
+        if (response.status === 206) {
+          const contentRange = response.headers.get('content-range') || '';
+          const match = contentRange.match(/bytes\s+(\d+)-(\d+)\/(\d+)/i);
+          const firstBuf = await response.arrayBuffer();
+          if (match) {
+            const totalSize = parseInt(match[3], 10);
+            let nextOffset = parseInt(match[2], 10) + 1;
+            const chunks: ArrayBuffer[] = [firstBuf];
+            while (nextOffset < totalSize && chunks.length < 16) {
+              const partRes = await fetch(url, {
+                headers: { Range: `bytes=${nextOffset}-` },
+              });
+              if (!partRes.ok) break;
+              const partBuf = await partRes.arrayBuffer();
+              if (partBuf.byteLength === 0) break;
+              chunks.push(partBuf);
+              nextOffset += partBuf.byteLength;
+            }
+            const fullBlob = new Blob(chunks, { type: contentType });
+            if (fullBlob.size >= MIN_FULL_SONG_BYTES) {
+              await saveTrackAudioBlob(track.id, fullBlob);
+              return true;
+            }
+          }
+        } else {
+          const blob = await response.blob();
+          if (blob && blob.size >= MIN_FULL_SONG_BYTES) {
+            await saveTrackAudioBlob(track.id, blob);
+            return true;
+          }
         }
       }
     }

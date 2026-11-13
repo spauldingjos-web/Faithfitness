@@ -38,6 +38,9 @@ import {
   COVER_HIPHOP_CROWN,
   COVER_WORSHIP_RNB,
   BANNER_CALISTHENICS,
+  normalizeTrackCoverUrl,
+  isGenericFallbackCover,
+  hydrateMissingTrackCovers,
   fetchLiveChristianMusicBatch,
   searchChristianCatalogLive,
 } from './data/musicCatalog';
@@ -104,6 +107,7 @@ function mergeAndDedupeCatalog(candidates: Track[]): Track[] {
     seenKeys.add(key);
     out.push({
       ...item,
+      coverUrl: normalizeTrackCoverUrl(item.coverUrl, item.genre),
       duration: Math.max(170, item.duration || 228),
       sourceOrigin: 'Verified Artist',
       audioPreviewUrl: `/api/music/full-song?title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}&id=${encodeURIComponent(item.id)}`,
@@ -286,7 +290,6 @@ export default function App() {
   // Audio Player State
   const [currentTrack, setCurrentTrack] = useState<Track>(INITIAL_TRACKS[0]);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(INITIAL_TRACKS[0].duration);
   const [volume, setVolume] = useState(0.85);
   const [isShuffle, setIsShuffle] = useState(false);
@@ -373,7 +376,6 @@ export default function App() {
   const handleSelectTrack = useCallback((track: Track, startOffset = 0) => {
     setCurrentTrack(track);
     setDuration(track.duration);
-    setCurrentTime(startOffset);
     setIsPlaying(true);
     audioEngine.loadAndPlay(track, startOffset);
     broadcastSync({ type: 'TRACK_CHANGE', track });
@@ -389,7 +391,7 @@ export default function App() {
       ].filter(Boolean);
       audioEngine.prefetchTracks(nextSlice);
     }
-  }, []);
+  }, [broadcastSync]);
 
   const handleNextTrack = useCallback(() => {
     const activePool =
@@ -407,11 +409,8 @@ export default function App() {
     if (next) handleSelectTrack(next);
   }, [tracks, currentTrack.id, isShuffle, activeTab, selectedGenre, handleSelectTrack]);
 
-  const currentTimeRef = useRef(0);
-  currentTimeRef.current = currentTime;
-
   const handlePrevTrack = useCallback(() => {
-    if (currentTimeRef.current > 4) {
+    if (audioEngine.getCurrentTime() > 4) {
       audioEngine.seek(0);
       return;
     }
@@ -427,8 +426,7 @@ export default function App() {
 
   useEffect(() => {
     audioEngine.setCallbacks(
-      (time, dur) => {
-        setCurrentTime(time);
+      (_time, dur) => {
         setDuration((prev) => (Math.abs(prev - dur) >= 1 ? dur : prev));
       },
       () => {
@@ -443,6 +441,12 @@ export default function App() {
       handleNextTrack
     );
   }, [currentTrack, isRepeat, handleNextTrack, handlePrevTrack]);
+
+  useEffect(() => {
+    return audioEngine.subscribePlayState((playing) => {
+      setIsPlaying(playing);
+    });
+  }, []);
 
   // Apply initial EQ gains
   useEffect(() => {
@@ -556,7 +560,7 @@ export default function App() {
     if (typeof window !== 'undefined' && 'caches' in window) {
       caches.keys().then((keys) => {
         keys.forEach((k) => {
-          if (k !== 'sanctuary-pulse-v14' && k !== 'sanctuary-audio-vault-v14') {
+          if (k !== 'sanctuary-pulse-v15' && k !== 'sanctuary-audio-vault-v15') {
             caches.delete(k).catch(() => {});
           }
         });
@@ -631,6 +635,34 @@ export default function App() {
       document.removeEventListener('visibilitychange', handleVisibilityOrOnline);
     };
   }, [autoFeedEnabled, triggerLiveMusicHarvest]);
+
+  // Upgrade any fallback genre covers (e.g., perpetual tracks without ytId) to official album artwork
+  useEffect(() => {
+    const candidates = tracks
+      .filter((t) => isGenericFallbackCover(t.coverUrl))
+      .slice(-10)
+      .reverse();
+    if (candidates.length === 0) return;
+
+    let cancelled = false;
+    void hydrateMissingTrackCovers(candidates, 6).then((updates) => {
+      if (cancelled || updates.size === 0) return;
+      setTracks((prev) =>
+        prev.map((t) => {
+          const nextArt = updates.get(t.id);
+          return nextArt ? { ...t, coverUrl: nextArt } : t;
+        })
+      );
+      setCurrentTrack((prev) => {
+        const nextArt = updates.get(prev.id);
+        return nextArt ? { ...prev, coverUrl: nextArt } : prev;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [tracks.length]);
 
   // Live debounced search against global Apple Music / YouTube Full-Song Catalog whenever user types a query
   useEffect(() => {
@@ -918,7 +950,7 @@ export default function App() {
       if (audioEngine.hasActiveAudio()) {
         audioEngine.resume(currentTrack);
       } else {
-        audioEngine.loadAndPlay(currentTrack, currentTimeRef.current);
+        audioEngine.loadAndPlay(currentTrack, audioEngine.getCurrentTime());
       }
       setIsPlaying(true);
     }
@@ -933,7 +965,7 @@ export default function App() {
       if (audioEngine.hasActiveAudio()) {
         audioEngine.resume(trk);
       } else {
-        audioEngine.loadAndPlay(trk, currentTimeRef.current);
+        audioEngine.loadAndPlay(trk, audioEngine.getCurrentTime());
       }
       setIsPlaying(true);
     }
@@ -2924,7 +2956,6 @@ export default function App() {
       <PlayerBarAndSheet
         currentTrack={currentTrack}
         isPlaying={isPlaying}
-        currentTime={currentTime}
         duration={duration}
         volume={volume}
         isShuffle={isShuffle}
@@ -2980,7 +3011,6 @@ export default function App() {
         tracks={filteredTracks.length > 0 ? filteredTracks : tracks}
         currentTrack={currentTrack}
         isPlaying={isPlaying}
-        currentTime={currentTime}
         duration={duration}
         likedTrackIds={bookmarkedIds}
         onSelectTrack={(trk) => handleSelectTrack(trk, 0)}

@@ -1269,7 +1269,7 @@ interface FullScreenVideoFeedModalProps {
   tracks: Track[];
   currentTrack: Track;
   isPlaying: boolean;
-  currentTime: number;
+  currentTime?: number;
   duration: number;
   spectrum?: number[];
   likedTrackIds: string[];
@@ -1295,8 +1295,8 @@ export const FullScreenVideoFeedModal: React.FC<FullScreenVideoFeedModalProps> =
   tracks,
   currentTrack,
   isPlaying,
-  currentTime,
-  duration,
+  currentTime: externalTime,
+  duration: externalDuration,
   spectrum,
   likedTrackIds,
   onSelectTrack,
@@ -1391,6 +1391,21 @@ export const FullScreenVideoFeedModal: React.FC<FullScreenVideoFeedModalProps> =
     setAiResyncCount(0);
     setIsAiResyncing(false);
   }, [currentTrack.id]);
+
+  const [liveProgress, setLiveProgress] = useState(() => ({
+    currentTime: externalTime ?? audioEngine.getCurrentTime(),
+    duration: externalDuration || audioEngine.getDuration(),
+  }));
+
+  useEffect(() => {
+    if (!isOpen) return;
+    return audioEngine.subscribeProgress((t, d) => {
+      setLiveProgress({ currentTime: t, duration: d });
+    });
+  }, [isOpen]);
+
+  const currentTime = externalTime ?? liveProgress.currentTime;
+  const duration = Math.max(externalDuration || 0, liveProgress.duration || 0) || currentTrack.duration;
 
   const timedLyrics = useTrackTimedLyrics(
     currentTrack,

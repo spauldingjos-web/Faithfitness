@@ -71,6 +71,8 @@ class SanctuaryAudioEngine {
   private lastEmittedAtMs = 0;
   private lastMediaNavAt = 0;
   private readonly pausedSpectrum = Array(16).fill(8);
+  private progressListeners = new Set<(currentTime: number, duration: number) => void>();
+  private playStateListeners = new Set<(isPlaying: boolean) => void>();
 
   private onTickCallback: (
     currentTime: number,
@@ -81,6 +83,33 @@ class SanctuaryAudioEngine {
   private onEndedCallback: (() => void) | null = null;
   private onPrevCallback: (() => void) | null = null;
   private onNextCallback: (() => void) | null = null;
+
+  public getCurrentTime(): number {
+    return this.currentTime;
+  }
+
+  public getDuration(): number {
+    return this.activeDuration;
+  }
+
+  public subscribeProgress(cb: (currentTime: number, duration: number) => void): () => void {
+    this.progressListeners.add(cb);
+    cb(this.currentTime, this.activeDuration);
+    return () => {
+      this.progressListeners.delete(cb);
+    };
+  }
+
+  public subscribePlayState(cb: (isPlaying: boolean) => void): () => void {
+    this.playStateListeners.add(cb);
+    return () => {
+      this.playStateListeners.delete(cb);
+    };
+  }
+
+  private emitPlayState(playing: boolean) {
+    this.playStateListeners.forEach((cb) => cb(playing));
+  }
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -280,6 +309,7 @@ class SanctuaryAudioEngine {
 
   private finishFullTrackPlayback() {
     this.isPlaying = false;
+    this.emitPlayState(false);
     this.currentTime = 0;
     this.stopProgressTimer();
     this.clearWatchdog();
@@ -495,6 +525,7 @@ class SanctuaryAudioEngine {
     this.lastPlayStartedAt = Date.now();
     this.activeDuration = Math.max(180, track.duration || 220);
     this.isPlaying = true;
+    this.emitPlayState(true);
     this.updateMediaSession(track, true);
     this.emitTick();
     this.startProgressLoop();
@@ -554,6 +585,7 @@ class SanctuaryAudioEngine {
   public pause() {
     this.playRequestId++;
     this.isPlaying = false;
+    this.emitPlayState(false);
     this.clearWatchdog();
     this.clearStallRecovery();
     if (this.audioEl) {
@@ -642,10 +674,13 @@ class SanctuaryAudioEngine {
   }
 
   private emitTick() {
-    if (!this.onTickCallback || !this.currentTrack) return;
+    if (!this.currentTrack) return;
     this.lastEmittedAtMs = Date.now();
-    const section = getSongSectionAtTime(this.currentTime, this.activeDuration);
-    this.onTickCallback(this.currentTime, this.activeDuration, this.pausedSpectrum, section);
+    this.progressListeners.forEach((cb) => cb(this.currentTime, this.activeDuration));
+    if (this.onTickCallback) {
+      const section = getSongSectionAtTime(this.currentTime, this.activeDuration);
+      this.onTickCallback(this.currentTime, this.activeDuration, this.pausedSpectrum, section);
+    }
   }
 
   public getLiveSpectrum(): number[] {

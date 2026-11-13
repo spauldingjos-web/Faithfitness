@@ -28,14 +28,14 @@ import {
   X,
 } from 'lucide-react';
 import { Track, Playlist, COVER_ROCK_ALTAR } from '../data/musicCatalog';
-import { SongSection, getSongSectionAtTime } from '../utils/audioEngine';
+import { SongSection, audioEngine, getSongSectionAtTime } from '../utils/audioEngine';
 import { downloadTrackToDevice } from '../utils/offlineVault';
 import { TrackVideoCanvas, useTrackTimedLyrics } from './SpotifyCanvasAndModals';
 
 interface PlayerBarAndSheetProps {
   currentTrack: Track;
   isPlaying: boolean;
-  currentTime: number;
+  currentTime?: number;
   duration: number;
   spectrum?: number[];
   volume: number;
@@ -68,11 +68,11 @@ interface PlayerBarAndSheetProps {
   activeTab?: string;
 }
 
-export const PlayerBarAndSheet: React.FC<PlayerBarAndSheetProps> = ({
+export const PlayerBarAndSheet: React.FC<PlayerBarAndSheetProps> = React.memo(({
   currentTrack,
   isPlaying,
-  currentTime,
-  duration,
+  currentTime: externalTime,
+  duration: externalDuration,
   spectrum,
   volume,
   isShuffle,
@@ -108,6 +108,20 @@ export const PlayerBarAndSheet: React.FC<PlayerBarAndSheetProps> = ({
   const [showPlayerLyrics, setShowPlayerLyrics] = useState(true);
   const [drawerTab, setDrawerTab] = useState<'upnext' | 'lyrics' | 'playlists'>('upnext');
   const [addedPlaylistId, setAddedPlaylistId] = useState<string | null>(null);
+  const [liveProgress, setLiveProgress] = useState(() => ({
+    currentTime: externalTime ?? audioEngine.getCurrentTime(),
+    duration: externalDuration || audioEngine.getDuration(),
+  }));
+
+  useEffect(() => {
+    return audioEngine.subscribeProgress((t, d) => {
+      setLiveProgress({ currentTime: t, duration: d });
+    });
+  }, []);
+
+  const currentTime = externalTime ?? liveProgress.currentTime;
+  const duration = Math.max(externalDuration || 0, liveProgress.duration || 0) || currentTrack.duration;
+
   const timedLyrics = useTrackTimedLyrics(
     currentTrack,
     duration,
@@ -771,4 +785,4 @@ export const PlayerBarAndSheet: React.FC<PlayerBarAndSheetProps> = ({
       </div>
     </>
   );
-};
+});

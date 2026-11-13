@@ -3,8 +3,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const safeDirname =
+  typeof __dirname !== 'undefined'
+    ? __dirname
+    : typeof import.meta !== 'undefined' && import.meta.url
+    ? path.dirname(fileURLToPath(import.meta.url))
+    : process.cwd();
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
@@ -94,6 +98,7 @@ interface AssembledFullSong {
   durationSec: number;
   matchedTitle: string;
   matchedArtist: string;
+  progressiveUrl?: string;
   scTrackTitle?: string;
   scUploader?: string;
   scPlayCount?: number;
@@ -1580,6 +1585,7 @@ async function assembleFullLengthSong(
                 durationSec: chosenDurSec,
                 matchedTitle: finalMatchedTitle,
                 matchedArtist: finalMatchedArtist,
+                progressiveUrl: sData.url,
                 scTrackTitle: String(chosen.title || ''),
                 scUploader: String(chosen.user?.username || ''),
                 scPlayCount: Number(chosen.playback_count || 0),
@@ -1700,6 +1706,14 @@ app.get('/api/music/full-song', async (req, res) => {
     }
 
     const range = req.headers.range;
+    const maxChunkBytes = downloadFilename ? totalLength : 1_500_000;
+
+    // On Vercel serverless, redirect long full-song audio playback directly to SoundCloud progressive CDN when available (bypasses 4.5MB lambda cap cleanly)
+    if (!downloadFilename && process.env.VERCEL && song.progressiveUrl && !range) {
+      res.redirect(302, song.progressiveUrl);
+      return;
+    }
+
     if (range) {
       const parts = range.replace(/bytes=/, '').split('-');
       let start = parts[0] ? parseInt(parts[0], 10) : NaN;
@@ -1713,13 +1727,25 @@ app.get('/api/music/full-song', async (req, res) => {
         if (Number.isNaN(end)) end = totalLength - 1;
       }
       const clampedStart = Math.max(0, Math.min(start, totalLength - 1));
-      const clampedEnd = Math.max(clampedStart, Math.min(end, totalLength - 1));
+      const requestedEnd = Math.max(clampedStart, Math.min(end, totalLength - 1));
+      const clampedEnd = Math.min(requestedEnd, clampedStart + maxChunkBytes - 1);
       const chunkLength = clampedEnd - clampedStart + 1;
 
       res.status(206);
       res.setHeader('Content-Range', `bytes ${clampedStart}-${clampedEnd}/${totalLength}`);
       res.setHeader('Content-Length', String(chunkLength));
       res.end(song.buffer.subarray(clampedStart, clampedEnd + 1));
+      return;
+    }
+
+    // Never exceed Vercel 4.5MB serverless payload limit on un-ranged requests
+    if (!downloadFilename && totalLength > 3_800_000) {
+      const clampedEnd = Math.min(totalLength - 1, maxChunkBytes - 1);
+      const chunkLength = clampedEnd + 1;
+      res.status(206);
+      res.setHeader('Content-Range', `bytes 0-${clampedEnd}/${totalLength}`);
+      res.setHeader('Content-Length', String(chunkLength));
+      res.end(song.buffer.subarray(0, clampedEnd + 1));
       return;
     }
 
@@ -1733,7 +1759,8 @@ app.get('/api/music/full-song', async (req, res) => {
 
 // Pre-warm audio buffer & audio-locked lyrics for upcoming queue / visible tracks so playback starts instantaneously
 app.post('/api/music/prewarm-batch', async (req, res) => {
-  const inputTracks = Array.isArray(req.body?.tracks) ? req.body.tracks.slice(0, 5) : [];
+  const maxPrewarm = process.env.VERCEL ? 1 : 5;
+  const inputTracks = Array.isArray(req.body?.tracks) ? req.body.tracks.slice(0, maxPrewarm) : [];
   res.json({ queued: inputTracks.length });
   void (async () => {
     for (const item of inputTracks) {
@@ -2479,29 +2506,38 @@ async function harvestServerDiscoveryBatch(): Promise<void> {
         });
       }
 
-      // Verify up to 10 candidates strictly against SoundCloud official vocal + duration-locked LRC
+      // Verify candidates strictly against SoundCloud official vocal + duration-locked LRC (in fast parallel mini-batches)
       let addedThisRound = 0;
-      for (const cand of filteredCandidates.slice(0, 10)) {
-        if (addedThisRound >= 4) break;
-        const ver = await verifySingleTrackForCatalog(cand.artist, cand.title, cand.duration);
-        if (!ver.verified) continue;
-        const cKey = `${cand.artist.toLowerCase()}__${normalizeSearchToken(ver.matchedTitle)}`;
-        if (discoveredCatalogKeys.has(cKey)) continue;
-        discoveredCatalogKeys.add(cKey);
-        discoveredCatalogPool.push({
-          id: cand.id,
-          title: ver.matchedTitle,
-          artist: cand.artist,
-          album: cand.album,
-          genre: seed.genre,
-          genreLabel: seed.genreLabel,
-          duration: ver.durationSec >= 95 ? ver.durationSec : cand.duration,
-          bpm: seed.bpm,
-          coverUrl: cand.coverUrl,
-          youtubeVideoId: cand.youtubeVideoId,
-          scriptureReference: seed.verse,
-        });
-        addedThisRound++;
+      const topCands = filteredCandidates.slice(0, process.env.VERCEL ? 6 : 10);
+      for (let i = 0; i < topCands.length && addedThisRound < 4; i += 3) {
+        const chunk = topCands.slice(i, i + 3);
+        const verResults = await Promise.all(
+          chunk.map(async (cand) => ({
+            cand,
+            ver: await verifySingleTrackForCatalog(cand.artist, cand.title, cand.duration),
+          }))
+        );
+        for (const { cand, ver } of verResults) {
+          if (addedThisRound >= 4) break;
+          if (!ver.verified) continue;
+          const cKey = `${cand.artist.toLowerCase()}__${normalizeSearchToken(ver.matchedTitle)}`;
+          if (discoveredCatalogKeys.has(cKey)) continue;
+          discoveredCatalogKeys.add(cKey);
+          discoveredCatalogPool.push({
+            id: cand.id,
+            title: ver.matchedTitle,
+            artist: cand.artist,
+            album: cand.album,
+            genre: seed.genre,
+            genreLabel: seed.genreLabel,
+            duration: ver.durationSec >= 95 ? ver.durationSec : cand.duration,
+            bpm: seed.bpm,
+            coverUrl: cand.coverUrl,
+            youtubeVideoId: cand.youtubeVideoId,
+            scriptureReference: seed.verse,
+          });
+          addedThisRound++;
+        }
       }
     } catch {
       // ignore transient error
@@ -2516,6 +2552,15 @@ async function harvestServerDiscoveryBatch(): Promise<void> {
 async function handleDiscoverNext(req: any, res: any) {
   const rawLimit = req.method === 'POST' ? req.body?.limit : req.query.limit;
   const limit = Math.min(12, Math.max(1, Number(rawLimit || 4)));
+  const rawCursor = req.method === 'POST' ? req.body?.cursor : req.query.cursor;
+  if (
+    typeof rawCursor === 'number' &&
+    Number.isFinite(rawCursor) &&
+    rawCursor >= 0 &&
+    discoveredCatalogPool.length === 0
+  ) {
+    serverHarvestCursor = Math.floor(rawCursor);
+  }
 
   const excludeSet = new Set<string>();
   const addExcludeVariants = (raw: string) => {
@@ -2532,6 +2577,8 @@ async function handleDiscoverNext(req: any, res: any) {
       excludeSet.add(`${aTok}::${bNorm}`);
       excludeSet.add(`${aNorm}::${bTok}`);
       excludeSet.add(`${aTok}::${bTok}`);
+      excludeSet.add(`${bNorm}::${aNorm}`);
+      excludeSet.add(`${bTok}::${aTok}`);
     }
   };
 
@@ -2548,27 +2595,32 @@ async function handleDiscoverNext(req: any, res: any) {
   const isExcluded = (t: DiscoveredServerTrack) => {
     const artistRaw = t.artist.toLowerCase().trim();
     const artistTok = normalizeMatchTokens(t.artist);
+    const artistSearchTok = normalizeSearchToken(t.artist);
     const titleTok = normalizeSearchToken(t.title);
     const titleTok2 = normalizeMatchTokens(t.title);
     return (
       excludeSet.has(`${artistRaw}::${titleTok}`) ||
       excludeSet.has(`${artistTok}::${titleTok}`) ||
+      excludeSet.has(`${artistTok}::${titleTok2}`) ||
+      excludeSet.has(`${artistSearchTok}::${titleTok}`) ||
       excludeSet.has(`${titleTok}::${artistTok}`) ||
       excludeSet.has(`${titleTok2}::${artistTok}`) ||
-      excludeSet.has(`${artistTok}::${titleTok2}`)
+      excludeSet.has(`${titleTok}::${artistSearchTok}`) ||
+      excludeSet.has(`${titleTok2}::${artistSearchTok}`)
     );
   };
 
   const unseen = () => discoveredCatalogPool.filter((t) => !isExcluded(t));
 
-  // If pool has fewer unseen tracks than requested, run up to 4 fast harvest cycles right now
-  for (let attempts = 0; attempts < 4 && unseen().length < limit; attempts++) {
+  // If pool has fewer unseen tracks than requested, run fast harvest cycles (bounded tightly on serverless)
+  const maxAttempts = process.env.VERCEL ? 2 : 4;
+  for (let attempts = 0; attempts < maxAttempts && unseen().length < limit; attempts++) {
     await harvestServerDiscoveryBatch();
   }
 
   const batch = unseen().slice(0, limit);
-  // Proactively warm next harvest cycle in background so subsequent requests are instantaneous
-  if (unseen().length < limit + 8) {
+  // Proactively warm next harvest cycle in background on persistent servers
+  if (!process.env.VERCEL && unseen().length < limit + 8) {
     void harvestServerDiscoveryBatch().catch(() => {});
   }
 
@@ -2584,14 +2636,15 @@ app.post('/api/music/discover-next', handleDiscoverNext);
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
-    const { createServer: createViteServer } = await import('vite');
+    const vitePkg = 'vite';
+    const { createServer: createViteServer } = await import(/* @vite-ignore */ vitePkg);
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(__dirname, 'dist');
+    const distPath = path.join(safeDirname, 'dist');
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
