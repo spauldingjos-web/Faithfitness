@@ -503,7 +503,8 @@ function inferGenreFromText(text: string): Exclude<ChristianGenre, 'all'> {
     lower.includes('kb') ||
     lower.includes('bizzle') ||
     lower.includes('zauntee') ||
-    lower.includes('1k phew')
+    lower.includes('1k phew') ||
+    /\bnf\b/.test(lower)
   ) {
     return 'hiphop';
   }
@@ -689,11 +690,124 @@ const FOREVER_SEARCH_MODIFIERS = [
   'deluxe',
 ];
 
+function mapServerDiscoveredToTrack(
+  srv: {
+    id: string;
+    title: string;
+    artist: string;
+    album?: string;
+    genre?: Exclude<ChristianGenre, 'all'>;
+    genreLabel?: string;
+    duration?: number;
+    bpm?: number;
+    coverUrl?: string;
+    youtubeVideoId?: string;
+    scriptureReference?: string;
+  },
+  idx: number
+): Track {
+  const genre: Exclude<ChristianGenre, 'all'> =
+    srv.genre || inferGenreFromText(`${srv.artist} ${srv.title}`);
+  const fallbackCover =
+    genre === 'rock' || genre === 'metal-hardcore' || genre === 'punk-ska'
+      ? COVER_ROCK_ALTAR
+      : genre === 'hiphop' || genre === 'reggae-afro'
+      ? COVER_HIPHOP_CROWN
+      : genre === 'workout-edm' || genre === 'ai-originals'
+      ? BANNER_CALISTHENICS
+      : COVER_WORSHIP_RNB;
+  const coverUrl =
+    srv.coverUrl ||
+    (srv.youtubeVideoId
+      ? `https://i.ytimg.com/vi/${srv.youtubeVideoId}/hqdefault.jpg`
+      : fallbackCover);
+  const cleanTitle = cleanSongTitleForCatalog(srv.title);
+  const bpm = srv.bpm || 132;
+  const fullSongStream = `/api/music/full-song?title=${encodeURIComponent(
+    cleanTitle
+  )}&artist=${encodeURIComponent(srv.artist)}&id=${encodeURIComponent(srv.id)}`;
+  const platforms: PlatformSource[] = ['Spotify', 'Apple Music', 'YouTube Music'];
+
+  return {
+    id: srv.id,
+    title: cleanTitle,
+    artist: srv.artist,
+    album: srv.album || 'Verified Christian Release',
+    genre,
+    genreLabel: srv.genreLabel ? `${srv.genreLabel} · Verified Christian` : 'Verified Christian Release',
+    duration: Math.max(150, srv.duration || 215),
+    bpm,
+    keySignature: idx % 2 === 0 ? 'D Minor' : 'G Major',
+    coverUrl,
+    audioPreviewUrl: fullSongStream,
+    youtubeVideoId: srv.youtubeVideoId || undefined,
+    youtubeCandidates: srv.youtubeVideoId ? [srv.youtubeVideoId] : undefined,
+    sourceOrigin: 'Verified Artist',
+    platformIngestedFrom: platforms[idx % platforms.length],
+    ingestedTimestamp: 'Just released',
+    scriptureReference: srv.scriptureReference || 'Psalm 150:6',
+    lyricsSnippet: [],
+    workoutSuitability:
+      bpm >= 145
+        ? ['Calisthenics Strength', 'HIIT Finisher', 'Bike Cadence']
+        : bpm >= 120
+        ? ['Bike Cadence', 'Calisthenics Strength']
+        : ['Mobility & Cooldown'],
+    hiFiFormat: idx % 2 === 0 ? '24-bit/96kHz FLAC' : 'Spatial Dolby Atmos',
+    playsCount: 'Verified Release',
+  };
+}
+
 export async function fetchLiveChristianMusicBatch(
   seedIndex: number,
   existingKeys?: Set<string>
 ): Promise<Track[]> {
-  // Combine CHRISTIAN_ARTIST_SEEDS with the full 350+ VERIFIED_CHRISTIAN_ARTISTS roster so discovery never stops!
+  const activeKeySet = existingKeys || new Set<string>();
+  const collectedTracks: Track[] = [];
+
+  // Tier 1 (Primary for web + downloaded PWAs): Pre-verified perpetual Christian server pool
+  try {
+    const discoverRes = await fetch('/api/music/discover-next', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        limit: 4,
+        exclude: Array.from(activeKeySet),
+      }),
+    });
+    if (discoverRes.ok) {
+      const data = await discoverRes.json();
+      if (Array.isArray(data?.tracks)) {
+        data.tracks.forEach((srv: any, idx: number) => {
+          if (!srv?.title || !srv?.artist || !srv?.id) return;
+          const check = verifyChristianTrack({
+            title: srv.title,
+            artist: srv.artist,
+            album: srv.album,
+            genreName: srv.genreLabel || srv.genre,
+          });
+          if (!check.isVerifiedChristian) return;
+          const trk = mapServerDiscoveredToTrack(
+            { ...srv, artist: check.matchedArtist || srv.artist },
+            idx
+          );
+          const k = getCanonicalTrackKey(trk.title, trk.artist);
+          if (!activeKeySet.has(k)) {
+            activeKeySet.add(k);
+            collectedTracks.push(trk);
+          }
+        });
+      }
+    }
+  } catch {
+    // offline or transient timeout; continue to fallback tiers
+  }
+
+  if (collectedTracks.length >= 3) {
+    return collectedTracks;
+  }
+
+  // Tier 2: Client live artist seed discovery + strict SoundCloud/LRCLIB server verification
   const totalSeeds = CHRISTIAN_ARTIST_SEEDS.length;
   const baseSeed = CHRISTIAN_ARTIST_SEEDS[seedIndex % totalSeeds];
   const useExtendedRoster = seedIndex >= totalSeeds && seedIndex % 2 === 1;
@@ -708,7 +822,6 @@ export async function fetchLiveChristianMusicBatch(
   const modifier = FOREVER_SEARCH_MODIFIERS[cycle % FOREVER_SEARCH_MODIFIERS.length];
   const dynamicQuery = modifier ? `${effectiveQuery} ${modifier}` : effectiveQuery;
   const itunesOffset = (cycle % 14) * 15;
-  const activeKeySet = existingKeys || new Set<string>();
 
   try {
     const [ytRes, itunesRes] = await Promise.allSettled([
@@ -784,8 +897,6 @@ export async function fetchLiveChristianMusicBatch(
       }
     }
 
-    // Verify live-discovered candidates against SoundCloud official vocals + true duration-locked LRC before admitting!
-    let verifiedTracks: Track[] = [];
     if (tracks.length > 0) {
       try {
         const vr = await fetch('/api/music/verify-batch', {
@@ -806,7 +917,7 @@ export async function fetchLiveChristianMusicBatch(
           for (const item of vData?.verified || []) {
             if (item?.id) vMap.set(item.id, item);
           }
-          verifiedTracks = tracks
+          const verified = tracks
             .filter((t) => vMap.has(t.id))
             .map((t) => {
               const v = vMap.get(t.id)!;
@@ -815,24 +926,26 @@ export async function fetchLiveChristianMusicBatch(
                 duration: v.durationSec >= 95 ? v.durationSec : t.duration,
               };
             });
+          collectedTracks.push(...verified);
         }
       } catch {
-        verifiedTracks = [];
+        // fallback cleanly
       }
     }
 
-    // Guarantee non-stop perpetual Christian uploads forever (even past 1,703 or when offline)
-    if (verifiedTracks.length < 3) {
+    // Tier 3 (Offline / Airplane-Mode PWA Fallback): Unlock unseen verified songs from expanded local vault
+    if (collectedTracks.length < 3) {
       const perpetual = generatePerpetualChristianTracks(
         seedIndex,
         activeKeySet,
-        3 - verifiedTracks.length
+        3 - collectedTracks.length
       );
-      verifiedTracks.push(...perpetual);
+      collectedTracks.push(...perpetual);
     }
 
-    return verifiedTracks;
+    return collectedTracks;
   } catch {
+    if (collectedTracks.length > 0) return collectedTracks;
     return generatePerpetualChristianTracks(seedIndex, activeKeySet, 3);
   }
 }

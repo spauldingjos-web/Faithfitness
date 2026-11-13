@@ -1,9 +1,10 @@
 import { Playlist, Track, INITIAL_PLAYLISTS, INITIAL_TRACKS } from '../data/musicCatalog';
 
 const DB_NAME = 'SanctuaryOfflineVaultDB';
-const DB_VERSION = 8;
+const DB_VERSION = 9;
 const STORE_TRACKS = 'offline_tracks';
 const STORE_AUDIO_BLOBS = 'offline_audio_blobs';
+const STORE_DISCOVERED_TRACKS = 'discovered_catalog_tracks';
 const MIN_FULL_SONG_BYTES = 850000; // Full-length songs are > 850KB (prevents 30s clips from caching)
 
 export interface UserCloudState {
@@ -84,14 +85,116 @@ function openVaultDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_TRACKS)) {
         db.createObjectStore(STORE_TRACKS, { keyPath: 'id' });
       }
-      if (db.objectStoreNames.contains(STORE_AUDIO_BLOBS)) {
-        db.deleteObjectStore(STORE_AUDIO_BLOBS);
+      if (!db.objectStoreNames.contains(STORE_AUDIO_BLOBS)) {
+        db.createObjectStore(STORE_AUDIO_BLOBS, { keyPath: 'id' });
       }
-      db.createObjectStore(STORE_AUDIO_BLOBS, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(STORE_DISCOVERED_TRACKS)) {
+        db.createObjectStore(STORE_DISCOVERED_TRACKS, { keyPath: 'id' });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
+}
+
+const DISCOVERED_TRACKS_LS_KEY = 'sanctuary_discovered_tracks_v1';
+const DISCOVERY_CURSOR_LS_KEY = 'sanctuary_discovery_cursor_v1';
+
+export function loadDiscoveryCursor(): number {
+  try {
+    const raw = localStorage.getItem(DISCOVERY_CURSOR_LS_KEY);
+    if (raw) {
+      const num = parseInt(raw, 10);
+      if (Number.isFinite(num) && num >= 0) return num;
+    }
+  } catch {
+    // ignore
+  }
+  return 0;
+}
+
+export function saveDiscoveryCursor(cursor: number): void {
+  try {
+    if (Number.isFinite(cursor) && cursor >= 0) {
+      localStorage.setItem(DISCOVERY_CURSOR_LS_KEY, String(Math.floor(cursor)));
+    }
+  } catch {
+    // ignore quota errors
+  }
+}
+
+export function loadDiscoveredTracksSync(): Track[] {
+  try {
+    const raw = localStorage.getItem(DISCOVERED_TRACKS_LS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as Track[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function loadDiscoveredTracksFromVault(): Promise<Track[]> {
+  const lsTracks = loadDiscoveredTracksSync();
+  try {
+    const db = await openVaultDB();
+    const idbTracks: (Track & { discoveredAtMs?: number })[] = await new Promise((resolve) => {
+      const tx = db.transaction(STORE_DISCOVERED_TRACKS, 'readonly');
+      const req = tx.objectStore(STORE_DISCOVERED_TRACKS).getAll();
+      req.onsuccess = () => resolve((req.result as (Track & { discoveredAtMs?: number })[]) || []);
+      req.onerror = () => resolve([]);
+    });
+
+    const byId = new Map<string, Track & { discoveredAtMs?: number }>();
+    for (const t of idbTracks) {
+      if (t?.id) byId.set(t.id, t);
+    }
+    for (const t of lsTracks) {
+      if (t?.id && !byId.has(t.id)) {
+        byId.set(t.id, t);
+      }
+    }
+
+    return Array.from(byId.values()).sort(
+      (a, b) => (b.discoveredAtMs || 0) - (a.discoveredAtMs || 0)
+    );
+  } catch {
+    return lsTracks;
+  }
+}
+
+export async function saveDiscoveredTracksToVault(discoveredTracks: Track[]): Promise<void> {
+  if (!Array.isArray(discoveredTracks) || discoveredTracks.length === 0) return;
+
+  // Store fast synchronous window in localStorage (up to 450 most recent releases to stay well under quota)
+  try {
+    const lsSlice = discoveredTracks.slice(0, 450);
+    localStorage.setItem(DISCOVERED_TRACKS_LS_KEY, JSON.stringify(lsSlice));
+  } catch {
+    try {
+      const smallerSlice = discoveredTracks.slice(0, 150);
+      localStorage.setItem(DISCOVERED_TRACKS_LS_KEY, JSON.stringify(smallerSlice));
+    } catch {
+      // ignore localStorage quota errors; IndexedDB holds full catalog
+    }
+  }
+
+  // Persist ALL discovered releases permanently in IndexedDB (supports thousands of songs)
+  try {
+    const db = await openVaultDB();
+    const tx = db.transaction(STORE_DISCOVERED_TRACKS, 'readwrite');
+    const store = tx.objectStore(STORE_DISCOVERED_TRACKS);
+    const now = Date.now();
+    discoveredTracks.slice(0, 3000).forEach((trk, idx) => {
+      if (!trk?.id) return;
+      store.put({
+        ...trk,
+        discoveredAtMs: (trk as Track & { discoveredAtMs?: number }).discoveredAtMs || now - idx,
+      });
+    });
+  } catch {
+    // ignore IDB errors
+  }
 }
 
 const memoryBlobUrlMap = new Map<string, string>();

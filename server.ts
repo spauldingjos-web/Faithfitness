@@ -323,16 +323,19 @@ function isInstrumentalOrRemakeText(text: string, mode: 'meta' | 'desc' = 'meta'
     'vocals only',
     'chord progression',
     'song breakdown',
+    'versao nao oficial',
+    'versão não oficial',
   ];
 
   if (phraseBlocklist.some((term) => t.includes(term))) return true;
 
   if (mode === 'meta') {
     if (
-      /\b(cover|covers|covered|covering|karaoke|tribute|tributes|remake|pista|playback|rehearsal|bootleg|mashup|blend|megamix|rework|rerub|lesson|tutorial|breakdown|nightcore|instrumental|instrumentals|piano|violin|cello|guitar|drum|drums|bass|flute|sax|saxophone|trumpet|harp|ukulele|orchestra|orchestral|symphony|lofi|lo-fi|beats|soaking|meditation|lullaby|midi|8-bit|chiptune|remi+x|rmx|flip|chipmunk|acoustic|slowed|reverb|slower|chopped|chopd|screwed|dubstep|trapnation|teminite|ost|soundtrack|soundtracks|interview|podcast|sermon|demo|techno|dj|solo|acappella|acapella|baptist|presbyterian|methodist|lutheran|catholic|chapel|parish|parody|tumbas|jardines|canta|poder|espanol)\b/i.test(
+      /\b(cover|covers|covered|covering|karaoke|tribute|tributes|remake|pista|playback|rehearsal|bootleg|mashup|blend|megamix|rework|rerub|lesson|tutorial|breakdown|nightcore|instrumental|instrumentals|piano|violin|cello|guitar|drum|drums|bass|flute|sax|saxophone|trumpet|harp|ukulele|orchestra|orchestral|symphony|lofi|lo-fi|beats|soaking|meditation|lullaby|midi|8-bit|8bit|chiptune|remi+x|remixed|rmx|flip|chipmunk|acoustic|slowed|reverb|slower|chopped|chopd|screwed|dubstep|trapnation|teminite|ost|soundtrack|soundtracks|interview|podcast|sermon|demo|techno|dj|solo|acappella|acapella|russian|espanol|portugues|versao|versão|baptist|presbyterian|methodist|lutheran|catholic|chapel|parish|parody|tumbas|jardines|canta|poder)\b/i.test(
         t
       ) ||
       /\/\/\s*track\b/i.test(t) ||
+      /\bspeed\s*x\s*\d/i.test(t) ||
       /[a-z]{3,}mix\b/i.test(t) ||
       /[)\]]\s*x\s+[a-z0-9]/i.test(t) ||
       /\([^)]*\b(edit|mix|vs|fast)\b[^)]*\)/i.test(t) ||
@@ -2289,6 +2292,279 @@ app.get('/api/music/proxy-audio', async (req, res) => {
   }
 });
 
+interface DiscoveredServerTrack {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  genre: string;
+  genreLabel: string;
+  duration: number;
+  bpm: number;
+  coverUrl: string;
+  youtubeVideoId?: string;
+  scriptureReference: string;
+}
+
+const SERVER_PERPETUAL_SEEDS: Array<{
+  artist: string;
+  genre: string;
+  genreLabel: string;
+  bpm: number;
+  verse: string;
+}> = [
+  { artist: 'Skillet', genre: 'rock', genreLabel: 'Christian Hard Rock', bpm: 150, verse: 'Joshua 1:9' },
+  { artist: 'Lecrae', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 142, verse: 'Romans 1:16' },
+  { artist: 'Chris Tomlin', genre: 'worship', genreLabel: 'Modern Worship', bpm: 102, verse: 'Psalm 95:1' },
+  { artist: 'Demon Hunter', genre: 'metal-hardcore', genreLabel: 'Christian Metal', bpm: 164, verse: 'Hebrews 13:5' },
+  { artist: 'NEEDTOBREATHE', genre: 'country-southern', genreLabel: 'Christian Southern Rock', bpm: 126, verse: 'Proverbs 17:17' },
+  { artist: 'TobyMac', genre: 'hiphop', genreLabel: 'Christian Hip-Hop / Pop', bpm: 136, verse: 'Philippians 4:13' },
+  { artist: 'Casting Crowns', genre: 'worship', genreLabel: 'Modern Worship', bpm: 94, verse: 'John 11:25' },
+  { artist: 'Red', genre: 'rock', genreLabel: 'Christian Alt Metal', bpm: 148, verse: 'Psalm 34:18' },
+  { artist: 'Thousand Foot Krutch', genre: 'rock', genreLabel: 'Christian Rock', bpm: 156, verse: 'Ephesians 6:10' },
+  { artist: 'Relient K', genre: 'punk-ska', genreLabel: 'Christian Pop-Punk', bpm: 158, verse: 'Psalm 32:7' },
+  { artist: 'Andy Mineo', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 146, verse: 'Romans 8:31' },
+  { artist: 'MercyMe', genre: 'worship', genreLabel: 'Praise & Worship', bpm: 96, verse: 'Revelation 21:4' },
+  { artist: 'Flyleaf', genre: 'rock', genreLabel: 'Christian Alt Rock', bpm: 152, verse: 'Psalm 139:7' },
+  { artist: 'August Burns Red', genre: 'metal-hardcore', genreLabel: 'Christian Metalcore', bpm: 170, verse: 'Proverbs 27:17' },
+  { artist: 'Big Daddy Weave', genre: 'country-southern', genreLabel: 'Christian Country & Soul', bpm: 118, verse: 'Psalm 107:2' },
+  { artist: 'Jonathan McReynolds', genre: 'rnb', genreLabel: 'Gospel R&B & Soul', bpm: 96, verse: 'Ephesians 2:8' },
+  { artist: 'Limoblaze', genre: 'reggae-afro', genreLabel: 'Afro-Gospel', bpm: 114, verse: 'Romans 8:32' },
+  { artist: 'Capital Kings', genre: 'workout-edm', genreLabel: 'Christian Electronic / EDM', bpm: 150, verse: '1 John 4:18' },
+  { artist: 'Jeremy Camp', genre: 'worship', genreLabel: 'Modern Worship', bpm: 108, verse: '2 Corinthians 5:7' },
+  { artist: 'Newsboys', genre: 'worship', genreLabel: 'Christian Praise Rock', bpm: 128, verse: 'Psalm 118:24' },
+  { artist: 'Switchfoot', genre: 'rock', genreLabel: 'Christian Alt Rock', bpm: 144, verse: 'John 10:10' },
+  { artist: 'Forrest Frank', genre: 'hiphop', genreLabel: 'Christian Pop / CHH', bpm: 132, verse: 'Psalm 118:24' },
+  { artist: 'NF', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 136, verse: 'Psalm 23:4' },
+  { artist: 'P.O.D.', genre: 'rock', genreLabel: 'Christian Nu-Metal / Rock', bpm: 150, verse: 'Joshua 1:9' },
+  { artist: 'Underoath', genre: 'metal-hardcore', genreLabel: 'Christian Post-Hardcore', bpm: 166, verse: '2 Corinthians 5:17' },
+  { artist: 'The Devil Wears Prada', genre: 'metal-hardcore', genreLabel: 'Christian Metalcore', bpm: 172, verse: 'Isaiah 41:10' },
+  { artist: 'Building 429', genre: 'country-southern', genreLabel: 'Christian Country Rock', bpm: 124, verse: 'Hebrews 11:16' },
+  { artist: 'Tenth Avenue North', genre: 'country-southern', genreLabel: 'Christian Southern / AC', bpm: 116, verse: 'Romans 8:38' },
+  { artist: 'MxPx', genre: 'punk-ska', genreLabel: 'Christian Skate Punk', bpm: 168, verse: 'Galatians 6:5' },
+  { artist: 'Anberlin', genre: 'punk-ska', genreLabel: 'Christian Alt Rock', bpm: 156, verse: '1 Corinthians 13:13' },
+  { artist: 'Hillsong UNITED', genre: 'worship', genreLabel: 'Modern Worship', bpm: 92, verse: 'Matthew 14:29' },
+  { artist: 'Phil Wickham', genre: 'worship', genreLabel: 'Modern Worship', bpm: 120, verse: 'Ephesians 2:8' },
+  { artist: 'Kari Jobe', genre: 'worship', genreLabel: 'Soaking Worship', bpm: 84, verse: 'Revelation 4:8' },
+  { artist: 'Matthew West', genre: 'ai-originals', genreLabel: 'Contemporary Christian', bpm: 118, verse: 'Colossians 3:13' },
+  { artist: 'Colton Dixon', genre: 'ai-originals', genreLabel: 'Contemporary Christian', bpm: 120, verse: 'Isaiah 43:2' },
+  { artist: 'Disciple', genre: 'rock', genreLabel: 'Christian Heavy Rock', bpm: 158, verse: 'Romans 8:37' },
+  { artist: 'Christafari', genre: 'reggae-afro', genreLabel: 'Christian Roots Reggae', bpm: 114, verse: 'Mark 11:9' },
+  { artist: 'Matthew Parker', genre: 'workout-edm', genreLabel: 'Christian Electronic / EDM', bpm: 146, verse: 'Psalm 16:11' },
+  { artist: 'Israel Houghton', genre: 'rnb', genreLabel: 'Gospel Praise & Soul', bpm: 124, verse: 'Psalm 107:1' },
+  { artist: 'KB', genre: 'hiphop', genreLabel: 'Christian Trap / CHH', bpm: 148, verse: '1 Corinthians 15:57' },
+  { artist: 'Trip Lee', genre: 'hiphop', genreLabel: 'Christian Hip-Hop', bpm: 144, verse: 'Romans 1:16' },
+  { artist: 'Anne Wilson', genre: 'country-southern', genreLabel: 'Christian Country', bpm: 116, verse: 'Matthew 11:28' },
+  { artist: 'Zach Williams', genre: 'country-southern', genreLabel: 'Christian Southern Rock', bpm: 118, verse: 'John 8:36' },
+  { artist: 'Tauren Wells', genre: 'ai-originals', genreLabel: 'Contemporary Christian', bpm: 122, verse: 'Jeremiah 1:5' },
+  { artist: 'Crowder', genre: 'country-southern', genreLabel: 'Christian Folk / Country', bpm: 120, verse: 'Psalm 100:2' },
+  { artist: 'Elevation Worship', genre: 'worship', genreLabel: 'Praise & Worship', bpm: 128, verse: 'Psalm 95:1' },
+  { artist: 'Brandon Lake', genre: 'worship', genreLabel: 'Modern Worship', bpm: 112, verse: 'Psalm 103:1' },
+  { artist: 'Hawk Nelson', genre: 'punk-ska', genreLabel: 'Christian Pop-Punk', bpm: 160, verse: 'Romans 8:38' },
+];
+
+const discoveredCatalogPool: DiscoveredServerTrack[] = [];
+const discoveredCatalogKeys = new Set<string>();
+let serverHarvestCursor = 0;
+let serverHarvestInFlight: Promise<void> | null = null;
+
+async function harvestServerDiscoveryBatch(): Promise<void> {
+  if (serverHarvestInFlight) return serverHarvestInFlight;
+  serverHarvestInFlight = (async () => {
+    try {
+      const seedIdx = serverHarvestCursor++;
+      const seed = SERVER_PERPETUAL_SEEDS[seedIdx % SERVER_PERPETUAL_SEEDS.length];
+      const round = Math.floor(seedIdx / SERVER_PERPETUAL_SEEDS.length);
+      const offset = (round % 12) * 15;
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      let items: any[] = [];
+      try {
+        const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(
+          seed.artist
+        )}&media=music&entity=song&limit=18&offset=${offset}`;
+        const itRes = await fetch(itunesUrl, {
+          headers: { 'User-Agent': 'SanctuaryPulseChristianMusic/1.0' },
+          signal: controller.signal,
+        });
+        if (itRes.ok) {
+          const itJson = await itRes.json();
+          if (Array.isArray(itJson?.results)) items = itJson.results;
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+
+      // Also check YouTube rich catalog for newer / unreleased YouTube-only drops
+      if (items.length < 4) {
+        const ytItems = await searchYouTubeRichCatalog(
+          `${seed.artist} ${round > 0 ? 'official audio' : ''}`.trim()
+        );
+        for (const y of ytItems) {
+          items.push({
+            trackId: `yt-${y.videoId}`,
+            trackName: y.title,
+            artistName: y.artist,
+            collectionName: 'Official Release',
+            trackTimeMillis: (y.durationSeconds || 215) * 1000,
+            artworkUrl100: y.thumbnailUrl,
+            youtubeVideoId: y.videoId,
+          });
+        }
+      }
+
+      const normSeedArtist = normalizeMatchTokens(seed.artist);
+      const filteredCandidates: Array<{
+        id: string;
+        title: string;
+        artist: string;
+        album: string;
+        duration: number;
+        coverUrl: string;
+        youtubeVideoId?: string;
+      }> = [];
+
+      for (const item of items) {
+        const rawTitle = String(item.trackName || '').trim();
+        const rawArtist = String(item.artistName || '').trim();
+        if (!rawTitle || !rawArtist) continue;
+        if (item.trackExplicitness === 'explicit' || item.collectionExplicitness === 'explicit') continue;
+        if (isProfaneOrSecular(`${rawTitle} ${rawArtist}`)) continue;
+        if (isInstrumentalOrRemakeText(`${rawTitle} ${item.collectionName || ''} ${rawArtist}`, 'meta')) continue;
+
+        const { cleanArtist, cleanTitle } = extractCanonicalArtistAndTitle(rawArtist, rawTitle);
+        if (!cleanTitle || cleanTitle.length < 2) continue;
+
+        // Require candidate artist to match the targeted verified Christian artist
+        const normItemArtist = ` ${normalizeMatchTokens(cleanArtist)} `;
+        if (!normItemArtist.includes(` ${normSeedArtist} `) && !` ${normSeedArtist} `.includes(normItemArtist)) {
+          continue;
+        }
+
+        const cKey = `${cleanArtist.toLowerCase()}__${normalizeSearchToken(cleanTitle)}`;
+        if (discoveredCatalogKeys.has(cKey)) continue;
+
+        const durSec = Math.round((item.trackTimeMillis || 0) / 1000);
+        if (durSec > 0 && (durSec < 100 || durSec > 480)) continue;
+
+        const cover = item.artworkUrl100
+          ? String(item.artworkUrl100).replace('100x100bb', '600x600bb')
+          : '';
+        filteredCandidates.push({
+          id: `srv-chr-${item.trackId}`,
+          title: cleanTitle,
+          artist: seed.artist,
+          album: String(item.collectionName || 'Official Christian Release'),
+          duration: durSec || 215,
+          coverUrl: cover,
+          youtubeVideoId: item.youtubeVideoId,
+        });
+      }
+
+      // Verify up to 10 candidates strictly against SoundCloud official vocal + duration-locked LRC
+      let addedThisRound = 0;
+      for (const cand of filteredCandidates.slice(0, 10)) {
+        if (addedThisRound >= 4) break;
+        const ver = await verifySingleTrackForCatalog(cand.artist, cand.title, cand.duration);
+        if (!ver.verified) continue;
+        const cKey = `${cand.artist.toLowerCase()}__${normalizeSearchToken(ver.matchedTitle)}`;
+        if (discoveredCatalogKeys.has(cKey)) continue;
+        discoveredCatalogKeys.add(cKey);
+        discoveredCatalogPool.push({
+          id: cand.id,
+          title: ver.matchedTitle,
+          artist: cand.artist,
+          album: cand.album,
+          genre: seed.genre,
+          genreLabel: seed.genreLabel,
+          duration: ver.durationSec >= 95 ? ver.durationSec : cand.duration,
+          bpm: seed.bpm,
+          coverUrl: cand.coverUrl,
+          youtubeVideoId: cand.youtubeVideoId,
+          scriptureReference: seed.verse,
+        });
+        addedThisRound++;
+      }
+    } catch {
+      // ignore transient error
+    } finally {
+      serverHarvestInFlight = null;
+    }
+  })();
+  return serverHarvestInFlight;
+}
+
+// Perpetual Verified Christian Release Feed (never stalls, strictly SoundCloud vocal + synced-LRC verified)
+async function handleDiscoverNext(req: any, res: any) {
+  const rawLimit = req.method === 'POST' ? req.body?.limit : req.query.limit;
+  const limit = Math.min(12, Math.max(1, Number(rawLimit || 4)));
+
+  const excludeSet = new Set<string>();
+  const addExcludeVariants = (raw: string) => {
+    const clean = raw.trim().toLowerCase();
+    if (!clean) return;
+    excludeSet.add(clean);
+    const parts = clean.split('::');
+    if (parts.length === 2) {
+      const aNorm = normalizeMatchTokens(parts[0]);
+      const aTok = normalizeSearchToken(parts[0]);
+      const bNorm = normalizeMatchTokens(parts[1]);
+      const bTok = normalizeSearchToken(parts[1]);
+      excludeSet.add(`${aNorm}::${bNorm}`);
+      excludeSet.add(`${aTok}::${bNorm}`);
+      excludeSet.add(`${aNorm}::${bTok}`);
+      excludeSet.add(`${aTok}::${bTok}`);
+    }
+  };
+
+  if (req.method === 'POST' && Array.isArray(req.body?.exclude)) {
+    for (const item of req.body.exclude) {
+      if (typeof item === 'string') addExcludeVariants(item);
+    }
+  } else if (typeof req.query.exclude === 'string' && req.query.exclude.trim()) {
+    for (const item of req.query.exclude.split(',')) {
+      addExcludeVariants(item);
+    }
+  }
+
+  const isExcluded = (t: DiscoveredServerTrack) => {
+    const artistRaw = t.artist.toLowerCase().trim();
+    const artistTok = normalizeMatchTokens(t.artist);
+    const titleTok = normalizeSearchToken(t.title);
+    const titleTok2 = normalizeMatchTokens(t.title);
+    return (
+      excludeSet.has(`${artistRaw}::${titleTok}`) ||
+      excludeSet.has(`${artistTok}::${titleTok}`) ||
+      excludeSet.has(`${titleTok}::${artistTok}`) ||
+      excludeSet.has(`${titleTok2}::${artistTok}`) ||
+      excludeSet.has(`${artistTok}::${titleTok2}`)
+    );
+  };
+
+  const unseen = () => discoveredCatalogPool.filter((t) => !isExcluded(t));
+
+  // If pool has fewer unseen tracks than requested, run up to 3 fast harvest cycles right now
+  for (let attempts = 0; attempts < 3 && unseen().length < limit; attempts++) {
+    await harvestServerDiscoveryBatch();
+  }
+
+  const batch = unseen().slice(0, limit);
+  // Proactively warm next harvest cycle in background so subsequent requests are instantaneous
+  if (unseen().length < limit + 6) {
+    void harvestServerDiscoveryBatch().catch(() => {});
+  }
+
+  res.json({
+    tracks: batch,
+    totalServerPool: discoveredCatalogPool.length,
+    cursor: serverHarvestCursor,
+  });
+}
+
+app.get('/api/music/discover-next', handleDiscoverNext);
+app.post('/api/music/discover-next', handleDiscoverNext);
+
 async function startServer() {
   if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
     const { createServer: createViteServer } = await import('vite');
@@ -2321,6 +2597,15 @@ async function startServer() {
         try {
           await assembleFullLengthSong(item.artist, item.title);
           await new Promise((r) => setTimeout(r, 850));
+        } catch {
+          // ignore
+        }
+      }
+      // Warm perpetual verified discovery pool gently so new songs are ready for installed/downloaded apps immediately
+      for (let i = 0; i < 6; i++) {
+        try {
+          await harvestServerDiscoveryBatch();
+          await new Promise((r) => setTimeout(r, 1200));
         } catch {
           // ignore
         }

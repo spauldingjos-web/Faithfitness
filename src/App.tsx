@@ -56,6 +56,12 @@ import {
   downloadTrackToDevice,
   cacheMultipleTracksOffline,
   fetchAndCacheTrackOffline,
+  loadDiscoveryCursor,
+  saveDiscoveryCursor,
+  loadDiscoveredTracksSync,
+  loadDiscoveredTracksFromVault,
+  saveDiscoveredTracksToVault,
+  preloadOfflineBlobUrls,
 } from './utils/offlineVault';
 import { PWAInstallButton, OfflineIndicator } from './components/PWAInstallButton';
 import { CalisthenicsCoachView } from './components/CalisthenicsCoachView';
@@ -76,6 +82,35 @@ import { GenrePageView } from './components/GenrePageView';
 
 type AppTab = 'home' | 'explore' | 'calisthenics' | 'radar' | 'library' | 'genre';
 type OriginFilter = 'all' | 'Verified Artist' | 'AI Studio Original';
+
+const INITIAL_SEED_ID_SET = new Set(INITIAL_TRACKS.map((t) => t.id));
+
+function mergeAndDedupeCatalog(candidates: Track[]): Track[] {
+  const seenIds = new Set<string>();
+  const seenKeys = new Set<string>();
+  const out: Track[] = [];
+  for (const item of candidates) {
+    if (!item?.id || !item?.title || !item?.artist) continue;
+    const ok = verifyChristianTrack({
+      title: item.title,
+      artist: item.artist,
+      album: item.album,
+      genreName: item.genre,
+    }).isVerifiedChristian;
+    if (!ok) continue;
+    const key = getCanonicalTrackKey(item.title, item.artist);
+    if (seenIds.has(item.id) || seenKeys.has(key)) continue;
+    seenIds.add(item.id);
+    seenKeys.add(key);
+    out.push({
+      ...item,
+      duration: Math.max(170, item.duration || 228),
+      sourceOrigin: 'Verified Artist',
+      audioPreviewUrl: `/api/music/full-song?title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}&id=${encodeURIComponent(item.id)}`,
+    });
+  }
+  return out;
+}
 
 export default function App() {
   // Theme state (defaults to intuitive Dark Mode as requested)
@@ -156,26 +191,23 @@ export default function App() {
     setSearchQuery(nextVal);
   }, []);
 
-  // Catalog & Live Auto-Feed state
+  // Catalog & Live Auto-Feed state (restores all previously released songs across PWA restarts)
   const [tracks, setTracks] = useState<Track[]>(() =>
-    INITIAL_TRACKS.filter(
-      (t) =>
-        verifyChristianTrack({
-          title: t.title,
-          artist: t.artist,
-          album: t.album,
-          genreName: t.genre,
-        }).isVerifiedChristian
-    )
+    mergeAndDedupeCatalog([...loadDiscoveredTracksSync(), ...INITIAL_TRACKS])
   );
   const tracksRef = useRef<Track[]>(tracks);
   useEffect(() => {
     tracksRef.current = tracks;
   }, [tracks]);
-  const [liveSeedIdx, setLiveSeedIdx] = useState(0);
+  const [liveSeedIdx, setLiveSeedIdx] = useState<number>(() => loadDiscoveryCursor());
+  const liveSeedIdxRef = useRef<number>(liveSeedIdx);
+  useEffect(() => {
+    liveSeedIdxRef.current = liveSeedIdx;
+  }, [liveSeedIdx]);
   const [isSyncingLive, setIsSyncingLive] = useState(false);
   const [autoFeedEnabled, setAutoFeedEnabled] = useState(true);
   const [lastAutoSyncLabel, setLastAutoSyncLabel] = useState('Synced moments ago');
+  const [showAllHomeCatalog, setShowAllHomeCatalog] = useState(false);
 
   // Pre-build all 365 days of calisthenics & devotionals for instant universal search across the entire app
   const all365Days = useMemo(() => {
@@ -417,20 +449,25 @@ export default function App() {
     audioEngine.setEQGains(eqGains);
   }, [eqGains]);
 
-  // Live Auto-Ingest Christian Music from YouTube Music / SoundCloud / Apple Music Seed Feed (Runs Forever)
+  // Live Auto-Ingest Christian Music from Perpetual Server Feed / Apple Music / SoundCloud (Runs Forever & Persists Offline)
   const triggerLiveMusicHarvest = useCallback(
     async (manual = false) => {
       if (isSyncingLive) return;
       setIsSyncingLive(true);
       try {
-        const nextSeed = liveSeedIdx;
-        setLiveSeedIdx((prev) => prev + 1);
+        const nextSeed = liveSeedIdxRef.current;
+        const incrementedSeed = nextSeed + 1;
+        liveSeedIdxRef.current = incrementedSeed;
+        setLiveSeedIdx(incrementedSeed);
+        saveDiscoveryCursor(incrementedSeed);
+
         const snapshotKeys = new Set(
           tracksRef.current.map((t) => getCanonicalTrackKey(t.title, t.artist))
         );
         const discovered = await fetchLiveChristianMusicBatch(nextSeed, snapshotKeys);
 
         let addedCount = 0;
+        let nextCatalogForVault: Track[] | null = null;
         setTracks((prev) => {
           const existingIds = new Set(prev.map((t) => t.id));
           const existingKeys = new Set(
@@ -446,8 +483,7 @@ export default function App() {
             });
             if (!check.isVerifiedChristian) continue;
             const key = getCanonicalTrackKey(d.title, d.artist);
-            const isPerpetualFallback = d.id.startsWith('perpetual-chr-');
-            if (!existingIds.has(d.id) && (!existingKeys.has(key) || isPerpetualFallback)) {
+            if (!existingIds.has(d.id) && !existingKeys.has(key)) {
               existingIds.add(d.id);
               existingKeys.add(key);
               fresh.push({
@@ -459,16 +495,17 @@ export default function App() {
             }
           }
 
-          // Guarantee perpetual non-stop uploading forever (even past 1,703 songs or when offline after downloading the app)
-          if (fresh.length < 2) {
-            const perpetualBatch = generatePerpetualChristianTracks(
-              nextSeed + prev.length,
+          if (fresh.length === 0) {
+            const offlineUnseen = generatePerpetualChristianTracks(
+              nextSeed,
               existingKeys,
-              3 - fresh.length
+              3
             );
-            for (const p of perpetualBatch) {
-              if (!existingIds.has(p.id)) {
+            for (const p of offlineUnseen) {
+              const pKey = getCanonicalTrackKey(p.title, p.artist);
+              if (!existingIds.has(p.id) && !existingKeys.has(pKey)) {
                 existingIds.add(p.id);
+                existingKeys.add(pKey);
                 fresh.push({
                   ...p,
                   duration: Math.max(170, p.duration || 234),
@@ -480,29 +517,42 @@ export default function App() {
           }
 
           addedCount = fresh.length;
-          return fresh.length > 0 ? [...fresh, ...prev] : prev;
+          if (fresh.length === 0) return prev;
+          const nextCatalog = [...fresh, ...prev];
+          nextCatalogForVault = nextCatalog;
+          return nextCatalog;
         });
 
+        if (nextCatalogForVault) {
+          const nonSeedTracks = (nextCatalogForVault as Track[]).filter(
+            (t) => !INITIAL_SEED_ID_SET.has(t.id)
+          );
+          void saveDiscoveredTracksToVault(nonSeedTracks);
+        }
+
         setLastAutoSyncLabel(
-          manual
-            ? `Added ${addedCount || 3} new Christian songs · AI Audio Sync Ready`
-            : `Christian Music Stream · +${addedCount || 3} songs · AI Lyric Sync`
+          addedCount > 0
+            ? manual
+              ? `Added ${addedCount} new Christian songs · Saved to App`
+              : `Live Forever Stream · +${addedCount} songs · Saved to App`
+            : 'All current Christian pools synced · Checking next batch...'
         );
       } finally {
         setIsSyncingLive(false);
       }
     },
-    [isSyncingLive, liveSeedIdx]
+    [isSyncingLive]
   );
 
-  // Purge stale service worker caches on startup and load multi-batch full-song Christian catalog immediately
+  // Purge stale service worker caches on startup, hydrate IndexedDB releases, and pull perpetual Christian batches cleanly
   useEffect(() => {
     let mounted = true;
+    let staggeredTimer: number | undefined;
 
     if (typeof window !== 'undefined' && 'caches' in window) {
       caches.keys().then((keys) => {
         keys.forEach((k) => {
-          if (k !== 'sanctuary-pulse-v11' && k !== 'sanctuary-audio-vault-v11') {
+          if (k !== 'sanctuary-pulse-v12' && k !== 'sanctuary-audio-vault-v12') {
             caches.delete(k).catch(() => {});
           }
         });
@@ -514,89 +564,70 @@ export default function App() {
       });
     }
 
-    // Ensure all initial tracks pass Christianity-Verification, are deduplicated canonically, and point to the full-length song endpoint
-    setTracks((prev) => {
-      const seenInit = new Set<string>();
-      return prev
-        .filter((item) => {
-          const ok = verifyChristianTrack({
-            title: item.title,
-            artist: item.artist,
-            album: item.album,
-            genreName: item.genre,
-          }).isVerifiedChristian;
-          if (!ok) return false;
-          const k = getCanonicalTrackKey(item.title, item.artist);
-          if (seenInit.has(k)) return false;
-          seenInit.add(k);
-          return true;
-        })
-        .map((item) => ({
-          ...item,
-          duration: Math.max(170, item.duration || 228),
-          audioPreviewUrl: `/api/music/full-song?title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}&id=${encodeURIComponent(item.id)}`,
-        }));
+    void preloadOfflineBlobUrls();
+
+    // Hydrate full persistent library from IndexedDB (even beyond localStorage quota)
+    void loadDiscoveredTracksFromVault().then((idbTracks) => {
+      if (!mounted || idbTracks.length === 0) return;
+      setTracks((prev) => mergeAndDedupeCatalog([...idbTracks, ...prev]));
     });
 
+    const admitBatch = (batch: Track[], nextCursor: number) => {
+      if (!mounted || batch.length === 0) return;
+      let mergedForVault: Track[] | null = null;
+      setTracks((prev) => {
+        const merged = mergeAndDedupeCatalog([...batch, ...prev]);
+        if (merged.length > prev.length) {
+          mergedForVault = merged;
+          return merged;
+        }
+        return prev;
+      });
+      if (mergedForVault) {
+        const nonSeed = (mergedForVault as Track[]).filter(
+          (t) => !INITIAL_SEED_ID_SET.has(t.id)
+        );
+        void saveDiscoveredTracksToVault(nonSeed);
+      }
+      liveSeedIdxRef.current = nextCursor;
+      setLiveSeedIdx(nextCursor);
+      saveDiscoveryCursor(nextCursor);
+    };
+
+    // Staggered startup harvest so installed PWAs release brand-new songs right away without 429 saturation
+    const initialCursor = loadDiscoveryCursor();
     const startupKeys = new Set(
       tracksRef.current.map((t) => getCanonicalTrackKey(t.title, t.artist))
     );
-
-    Promise.all([
-      fetchLiveChristianMusicBatch(0, startupKeys),
-      fetchLiveChristianMusicBatch(1, startupKeys),
-      fetchLiveChristianMusicBatch(2, startupKeys),
-      fetchLiveChristianMusicBatch(3, startupKeys),
-      fetchLiveChristianMusicBatch(4, startupKeys),
-      fetchLiveChristianMusicBatch(5, startupKeys),
-    ]).then((batches) => {
+    void fetchLiveChristianMusicBatch(initialCursor, startupKeys).then((firstBatch) => {
+      admitBatch(firstBatch, initialCursor + 1);
       if (!mounted) return;
-      const combined = batches.flat();
-      if (combined.length > 0) {
-        setTracks((prev) => {
-          const existingIds = new Set(prev.map((t) => t.id));
-          const existingKeys = new Set(
-            prev.map((t) => getCanonicalTrackKey(t.title, t.artist))
-          );
-          const uniqueNew = combined
-            .filter((item) => {
-              const check = verifyChristianTrack({
-                title: item.title,
-                artist: item.artist,
-                album: item.album,
-                genreName: item.genre,
-              });
-              if (!check.isVerifiedChristian) return false;
-              const key = getCanonicalTrackKey(item.title, item.artist);
-              if (existingIds.has(item.id) || existingKeys.has(key)) return false;
-              existingIds.add(item.id);
-              existingKeys.add(key);
-              return true;
-            })
-            .map((item) => ({
-              ...item,
-              duration: Math.max(170, item.duration || 228),
-              audioPreviewUrl: `/api/music/full-song?title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}&id=${encodeURIComponent(item.id)}`,
-            }));
-          return [...prev, ...uniqueNew];
+      staggeredTimer = window.setTimeout(() => {
+        if (!mounted) return;
+        const secondKeys = new Set(
+          tracksRef.current.map((t) => getCanonicalTrackKey(t.title, t.artist))
+        );
+        void fetchLiveChristianMusicBatch(initialCursor + 1, secondKeys).then((secondBatch) => {
+          admitBatch(secondBatch, initialCursor + 2);
         });
-        setLiveSeedIdx(6);
-      }
+      }, 2800);
     });
+
     // Pre-warm top 3 tracks immediately so clicking Play starts instantaneously
     audioEngine.prefetchTracks(INITIAL_TRACKS.slice(0, 3));
 
     return () => {
       mounted = false;
+      if (staggeredTimer) window.clearTimeout(staggeredTimer);
     };
   }, []);
 
-  // Forever non-stop auto-ingest interval (gently uploads verified Christian songs every 12s without saturating main thread)
+  // Forever non-stop auto-ingest interval (gently uploads & persists verified Christian songs every 10s forever)
   useEffect(() => {
     if (!autoFeedEnabled) return;
     const interval = window.setInterval(() => {
-      triggerLiveMusicHarvest(false);
-    }, 12000);
+      void triggerLiveMusicHarvest(false);
+    }, 10000);
     return () => clearInterval(interval);
   }, [autoFeedEnabled, triggerLiveMusicHarvest]);
 
@@ -1814,7 +1845,7 @@ export default function App() {
                     </div>
 
                     <div className="rounded-2xl bg-white dark:bg-[#12141E] border border-slate-200 dark:border-slate-800/80 divide-y divide-slate-100 dark:divide-slate-800/70">
-                      {filteredTracks.slice(18, 95).map((trk, idx) => {
+                      {(showAllHomeCatalog ? filteredTracks.slice(18) : filteredTracks.slice(18, 95)).map((trk, idx) => {
                         const active = currentTrack.id === trk.id;
                         const bookmarked = bookmarkedIds.includes(trk.id);
                         const offline = offlineIds.includes(trk.id);
@@ -1907,6 +1938,18 @@ export default function App() {
                         );
                       })}
                     </div>
+                    {filteredTracks.length > 95 && (
+                      <div className="flex justify-center pt-1">
+                        <button
+                          onClick={() => setShowAllHomeCatalog((prev) => !prev)}
+                          className="min-h-[40px] px-5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-amber-500 hover:text-slate-950 text-xs font-bold text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
+                        >
+                          {showAllHomeCatalog
+                            ? 'Show Compact Catalog (First 95)'
+                            : `View All ${filteredTracks.length} Christian Songs`}
+                        </button>
+                      </div>
+                    )}
                   </section>
                 </div>
               )}
