@@ -234,6 +234,10 @@ class SanctuaryAudioEngine {
 
       el.addEventListener('ended', () => {
         if (!this.isPlaying) return;
+        // Never treat playback ending under 35 seconds as a completed song (prevents machine-gun playlist skipping)
+        if (this.currentTime < 35) {
+          return;
+        }
         const realEndThreshold = Math.max(
           45,
           (Number.isFinite(el.duration) && el.duration >= 95 ? el.duration : this.activeDuration) - 10
@@ -453,7 +457,7 @@ class SanctuaryAudioEngine {
       }
 
       if (requestId === this.playRequestId && this.isPlaying) {
-        this.finishFullTrackPlayback();
+        this.pause();
       }
     }
   }
